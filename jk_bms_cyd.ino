@@ -361,51 +361,43 @@ static void syncBMSData(int idx) {
 static void drawHeader(const BMSData& d) {
   tft.fillRect(0,0,SCREEN_W,HEADER_H,CLR_HEADER_BG);
 
-  // Battery label + page navigation in header corners
-  char pageLabel[8];
+  // Battery label centered (font 2, textSize 1 = 8x12 per char)
+  char pageLabel[16];
   snprintf(pageLabel, sizeof(pageLabel), "BATTERY %d", navState.currentPage + 1);
-
-  // Left arrow (previous page)
-  if (navState.currentPage > 0) {
-    tft.fillRect(2, 2, 36, HEADER_H - 4, CLR_DARK_BLUE);
-    tft.drawRect(2, 2, 36, HEADER_H - 4, CLR_BLUE);
-    tft.setTextColor(CLR_WHITE, CLR_DARK_BLUE);
-    tft.drawCentreString("◀", 20, HEADER_H/2-6, 2);
-  }
-
-  // Battery label centered
   tft.setTextColor(CLR_WHITE, CLR_HEADER_BG);
-  tft.drawString(pageLabel, SCREEN_W/2 - 40, HEADER_H/2-6, 2);
+  tft.drawString(pageLabel, 84, 8, 2);
 
-  // Right arrow (next page)
+  // Left arrow button (previous page) - on left edge
+  if (navState.currentPage > 0) {
+    tft.fillRect(2, 2, 38, 28, CLR_DARK_BLUE);
+    tft.drawRect(2, 2, 38, 28, CLR_BLUE);
+    tft.setTextColor(CLR_WHITE, CLR_DARK_BLUE);
+    tft.drawString("<", 13, 6, 3);
+  }
+
+  // Right arrow button (next page) - on right edge
   if (navState.currentPage < NUM_BMS - 1) {
-    int ax = SCREEN_W - 38;
-    tft.fillRect(ax, 2, 36, HEADER_H - 4, CLR_DARK_GREEN);
-    tft.drawRect(ax, 2, 36, HEADER_H - 4, CLR_GREEN);
+    tft.fillRect(SCREEN_W - 40, 2, 38, 28, CLR_DARK_GREEN);
+    tft.drawRect(SCREEN_W - 40, 2, 38, 28, CLR_GREEN);
     tft.setTextColor(CLR_WHITE, CLR_DARK_GREEN);
-    tft.drawCentreString("▶", ax + 18, HEADER_H/2-6, 2);
+    tft.drawString(">", SCREEN_W - 29, 6, 3);
   }
 
-  // Connection status - right side
-  bool anyConnected = false;
-  for (int i = 0; i < NUM_BMS; i++) {
-    if (jkBmsDevices[i] != nullptr && jkBmsDevices[i]->connected) {
-      anyConnected = true; break;
+  // Connection status indicator (dot at bottom-right)
+  uint16_t dotColor;
+  if (wifiConnected) {
+    bool anyConnected = false;
+    for (int i = 0; i < NUM_BMS; i++) {
+      if (jkBmsDevices[i] != nullptr && jkBmsDevices[i]->connected) {
+        anyConnected = true; break;
+      }
     }
-  }
-
-  tft.setTextSize(1);
-  int statusX = anyConnected ? SCREEN_W - PADDING - 60 : SCREEN_W - PADDING - 70;
-  if (wifiConnected && anyConnected) {
-    tft.setTextColor(CLR_GREEN, CLR_HEADER_BG);
-    tft.drawRightString("CONNECTED", SCREEN_W - PADDING - 40, HEADER_H/2-6, 2);
-  } else if (wifiConnected) {
-    tft.setTextColor(CLR_AMBER, CLR_HEADER_BG);
-    tft.drawRightString("SCANNING...", SCREEN_W - PADDING - 50, HEADER_H/2-6, 2);
+    dotColor = anyConnected ? CLR_GREEN : CLR_AMBER;
   } else {
-    tft.setTextColor(CLR_RED, CLR_HEADER_BG);
-    tft.drawRightString("NO WIFI", SCREEN_W - PADDING - 50, HEADER_H/2-6, 2);
+    dotColor = CLR_RED;
   }
+  tft.fillCircle(175, 24, 6, dotColor);
+  tft.drawCircle(175, 24, 6, CLR_HEADER_BG);
 }
 
 static void drawSOCBar(const BMSData& d) {
