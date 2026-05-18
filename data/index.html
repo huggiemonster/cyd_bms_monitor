@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JK-BMS Monitor</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="container">
+  <h1>JK-BMS Monitor</h1>
+
+  <!-- Overview Section -->
+  <div class="section">
+    <h2>Overview</h2>
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Battery Voltage</div>
+        <div class="stat-value" id="battery-voltage">--</div>
+        <div class="stat-unit">V</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Current</div>
+        <div class="stat-value" id="charge-current">--</div>
+        <div class="stat-unit">A</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Power</div>
+        <div class="stat-value" id="battery-power">--</div>
+        <div class="stat-unit">W</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">SOC</div>
+        <div class="stat-value" id="percent-remain">--</div>
+        <div class="stat-unit">%</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SOC Bar -->
+  <div class="section">
+    <h2>State of Charge</h2>
+    <div class="soc-container">
+      <div class="soc-bar-bg">
+        <div class="soc-bar-fill" id="soc-bar" style="width: 0%"></div>
+      </div>
+      <div class="soc-info">
+        <span>Capacity: <strong id="capacity-remain">--</strong> / <strong id="nominal-capacity">--</strong> Ah</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cell Voltages -->
+  <div class="section">
+    <h2>Cell Voltages</h2>
+    <div class="cell-grid" id="cell-grid"></div>
+    <div class="cell-summary">
+      <span>Avg: <strong id="avg-cell-voltage">--</strong> V</span>
+      <span>Delta: <strong id="delta-cell-voltage">--</strong> V</span>
+    </div>
+  </div>
+
+  <!-- Temperatures -->
+  <div class="section">
+    <h2>Temperatures</h2>
+    <div class="stats-grid" style="grid-template-columns: repeat(3, 1fr);">
+      <div class="stat-card">
+        <div class="stat-label">Cell T1</div>
+        <div class="stat-value" id="battery-t1">--</div>
+        <div class="stat-unit">°C</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Cell T2</div>
+        <div class="stat-value" id="battery-t2">--</div>
+        <div class="stat-unit">°C</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">MOS</div>
+        <div class="stat-value" id="mos-temp">--</div>
+        <div class="stat-unit">°C</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Status Flags -->
+  <div class="section">
+    <h2>Status</h2>
+    <div class="flags-grid">
+      <div class="flag" id="flag-charge">
+        <span class="flag-label">Charge</span>
+        <span class="flag-value">--</span>
+      </div>
+      <div class="flag" id="flag-discharge">
+        <span class="flag-label">Discharge</span>
+        <span class="flag-value">--</span>
+      </div>
+      <div class="flag" id="flag-balance">
+        <span class="flag-label">Balance</span>
+        <span class="flag-value">--</span>
+      </div>
+      <div class="flag" id="flag-balancing">
+        <span class="flag-label">Balancing</span>
+        <span class="flag-value">--</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="section">
+    <h2>Controls</h2>
+    <div class="controls-grid">
+      <button class="btn btn-charge" onclick="toggleControl('charge')">
+        <span class="btn-label">Charge</span>
+        <span class="btn-status" id="btn-charge-status">--</span>
+      </button>
+      <button class="btn btn-discharge" onclick="toggleControl('discharge')">
+        <span class="btn-label">Discharge</span>
+        <span class="btn-status" id="btn-discharge-status">--</span>
+      </button>
+      <button class="btn btn-balance" onclick="toggleControl('balance')">
+        <span class="btn-label">Balance</span>
+        <span class="btn-status" id="btn-balance-status">--</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- System Info -->
+  <div class="section">
+    <h2>System Info</h2>
+    <div class="info-grid">
+      <div class="info-item"><span>Cycles</span><span id="cycle-count">--</span></div>
+      <div class="info-item"><span>Uptime</span><span id="uptime">--</span></div>
+      <div class="info-item"><span>Free Heap</span><span id="free-heap">--</span></div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <span id="last-update">Last update: --</span>
+  </div>
+</div>
+
+<script>
+const API_BASE = '';
+let updateInterval;
+
+function getCellColor(v) {
+  if (v < 3.0) return '#ff4444';
+  if (v < 3.3 || v > 3.9) return '#ffaa00';
+  return '#44ff44';
+}
+
+function getSocColor(pct) {
+  if (pct <= 10) return '#ff4444';
+  if (pct <= 25) return '#ffaa00';
+  return '#44ff44';
+}
+
+function getTempColor(t) {
+  if (t > 55 || t < 0) return '#ff4444';
+  return '#44aaff';
+}
+
+async function updateData() {
+  try {
+    const resp = await fetch(API_BASE + '/data');
+    const data = await resp.json();
+
+    // Overview
+    document.getElementById('battery-voltage').textContent = data.battery_voltage ? data.battery_voltage.toFixed(2) : '--';
+    document.getElementById('charge-current').textContent = data.charge_current ? data.charge_current.toFixed(2) : '--';
+    document.getElementById('battery-power').textContent = data.battery_power ? data.battery_power.toFixed(1) : '--';
+    document.getElementById('percent-remain').textContent = data.percent_remain || '--';
+
+    // SOC
+    const soc = data.percent_remain || 0;
+    const socBar = document.getElementById('soc-bar');
+    socBar.style.width = soc + '%';
+    socBar.style.background = getSocColor(soc);
+    document.getElementById('capacity-remain').textContent = data.capacity_remain ? data.capacity_remain.toFixed(2) : '--';
+    document.getElementById('nominal-capacity').textContent = data.nominal_capacity ? data.nominal_capacity.toFixed(2) : '--';
+
+    // Cell voltages
+    const cellGrid = document.getElementById('cell-grid');
+    cellGrid.innerHTML = '';
+    if (data.cell_voltages) {
+      data.cell_voltages.forEach((v, i) => {
+        const div = document.createElement('div');
+        div.className = 'cell';
+        div.style.borderLeftColor = getCellColor(v);
+        div.innerHTML = '<div class="cell-name">C' + (i+1) + '</div><div class="cell-value">' + v.toFixed(3) + '</div><div class="cell-unit">V</div>';
+        cellGrid.appendChild(div);
+      });
+    }
+    document.getElementById('avg-cell-voltage').textContent = data.avg_cell_voltage ? data.avg_cell_voltage.toFixed(3) : '--';
+    document.getElementById('delta-cell-voltage').textContent = data.delta_cell_voltage ? data.delta_cell_voltage.toFixed(3) : '--';
+
+    // Temperatures
+    document.getElementById('battery-t1').textContent = data.battery_t1 != null ? data.battery_t1.toFixed(1) : '--';
+    document.getElementById('battery-t2').textContent = data.battery_t2 != null ? data.battery_t2.toFixed(1) : '--';
+    document.getElementById('mos-temp').textContent = data.mos_temp != null ? data.mos_temp.toFixed(1) : '--';
+    if (data.battery_t1 != null) document.getElementById('battery-t1').style.color = getTempColor(data.battery_t1);
+    if (data.battery_t2 != null) document.getElementById('battery-t2').style.color = getTempColor(data.battery_t2);
+    if (data.mos_temp != null) document.getElementById('mos-temp').style.color = getTempColor(data.mos_temp);
+
+    // Flags
+    const setFlag = (id, val) => {
+      const el = document.getElementById(id);
+      el.querySelector('.flag-value').textContent = val ? 'ON' : 'OFF';
+      el.classList.toggle('active', !!val);
+    };
+    setFlag('flag-charge', data.charge);
+    setFlag('flag-discharge', data.discharge);
+    setFlag('flag-balance', data.balance);
+    document.getElementById('flag-balancing').querySelector('.flag-value').textContent = data.balancing_action || 0;
+    document.getElementById('flag-balancing').classList.toggle('active', (data.balancing_action || 0) > 0);
+
+    // Buttons
+    document.getElementById('btn-charge-status').textContent = data.charge ? 'ON' : 'OFF';
+    document.getElementById('btn-discharge-status').textContent = data.discharge ? 'ON' : 'OFF';
+    document.getElementById('btn-balance-status').textContent = data.balance ? 'ON' : 'OFF';
+
+    // System info
+    document.getElementById('cycle-count').textContent = data.cycle_count || 0;
+    document.getElementById('uptime').textContent = data.uptime_formatted || '--';
+
+    document.getElementById('last-update').textContent = 'Last update: ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    console.error('Fetch error:', e);
+  }
+}
+
+async function toggleControl(action) {
+  try {
+    const resp = await fetch(API_BASE + '/control', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action: action, state: 'toggle'})
+    });
+    if (resp.ok) {
+      setTimeout(updateData, 500);
+    }
+  } catch(e) {
+    console.error('Control error:', e);
+  }
+}
+
+// Fetch heap info
+async function updateHeap() {
+  try {
+    const resp = await fetch(API_BASE + '/freeheap');
+    const data = await resp.json();
+    document.getElementById('free-heap').textContent = data.free_heap || '--';
+  } catch(e) {}
+}
+
+// Start
+updateData();
+updateHeap();
+updateInterval = setInterval(updateData, 3000);
+setInterval(updateHeap, 10000);
+</script>
+</body>
+</html>
