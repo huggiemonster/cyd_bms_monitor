@@ -371,18 +371,18 @@ static void drawHeader(const BMSData& d) {
   // Left arrow button (previous page) - on left edge
   if (navState.currentPage > 0) {
     tft.fillRect(2, 2, 36, 28, CLR_DARK_BLUE);
-    tft.drawRect(2, 2, 36, 28, CLR_BLUE);
-    tft.setTextColor(CLR_WHITE, CLR_DARK_BLUE);
-    tft.drawString("<", 13, 6, 3);
+    tft.drawRoundRect(2, 2, 36, 28, 4, CLR_BLUE);
+    tft.setTextColor(CLR_WHITE);
+    tft.drawCentreString("<", 2 + 18, 6, 4);
   }
 
   // Right arrow button (next page) - on right edge
   if (navState.currentPage < NUM_BMS - 1) {
     int ax = SCREEN_W - 38;
     tft.fillRect(ax, 2, 36, 28, CLR_DARK_GREEN);
-    tft.drawRect(ax, 2, 36, 28, CLR_GREEN);
-    tft.setTextColor(CLR_WHITE, CLR_DARK_GREEN);
-    tft.drawString(">", ax + 12, 6, 3);
+    tft.drawRoundRect(ax, 2, 36, 28, 4, CLR_GREEN);
+    tft.setTextColor(CLR_WHITE);
+    tft.drawCentreString(">", ax + 18, 6, 4);
   }
 
   // Connection status indicator (dot at bottom-center)
@@ -506,6 +506,7 @@ static void drawControls(const BMSData& d) {
 }
 
 static void drawScreen(const BMSData& d) {
+  tft.startWrite();
   tft.fillScreen(CLR_BLACK);
   drawHeader(d);
   drawSOCBar(d);
@@ -513,15 +514,18 @@ static void drawScreen(const BMSData& d) {
   drawBatteryStats(d);
   drawTemps(d);
   drawControls(d);
+  tft.endWrite();
 }
 
 // ===================== Touch =====================
 static void readTouch() {
   if(touchscreen.touched()) {
     TS_Point p = touchscreen.getPoint();
-    touch.x = map(p.x, TOUCH_MIN_X, TOUCH_MAX_X, 0, SCREEN_W);
-    touch.y = map(p.y, TOUCH_MIN_Y, TOUCH_MAX_Y, 0, SCREEN_H);
+    // Landscape rotation: swap touch axes
+    touch.x = map(p.y, TOUCH_MIN_Y, TOUCH_MAX_Y, 0, SCREEN_W);
+    touch.y = map(p.x, TOUCH_MIN_X, TOUCH_MAX_X, 0, SCREEN_H);
     touch.touched = p.z > 0;
+    DBG_PRINTF("Touch: x=%d y=%d z=%d\n", touch.x, touch.y, p.z);
   } else {
     touch.touched = false;
   }
@@ -783,6 +787,7 @@ void setup() {
 
   // TFT
   tft.init();
+  tft.setSwapBytes(true);
   tft.setRotation(1);
   tft.fillScreen(CLR_BLACK);
   tft.setTextColor(CLR_CYAN);
