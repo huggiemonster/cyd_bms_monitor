@@ -63,7 +63,7 @@ static const int  NUM_BMS        = 2;
 #define HEADER_H    32
 #define SOC_BAR_H   28
 #define CELL_ROWS   4
-#define CELL_ROW_H  28
+#define CELL_ROW_H  24
 #define STATS_BLOCK_H 56
 #define CTRL_BTN_H  36
 #define PADDING     8
@@ -441,10 +441,10 @@ static void drawCellVoltages(const BMSData& d) {
 }
 
 static void drawBatteryStats(const BMSData& d) {
-  // Right side panel - top
+  // Right side panel - compact
   int x=220, y=TOP_PAD+SOC_BAR_H+10;
-  tft.fillRect(x,y-6,90,STATS_BLOCK_H,CLR_CARD_BG);
-  tft.drawRect(x,y-6,90,STATS_BLOCK_H,CLR_DARK_GRAY);
+  tft.fillRect(x,y-6,90,40,CLR_CARD_BG);
+  tft.drawRect(x,y-6,90,40,CLR_DARK_GRAY);
   tft.setTextColor(CLR_CYAN,CLR_CARD_BG);
   tft.drawString("STATS",x+6,y,1);
   char s[24];
@@ -455,14 +455,11 @@ static void drawBatteryStats(const BMSData& d) {
   snprintf(s,sizeof(s),"%.1fA",d.chargeCurrent);
   tft.drawString("I:",x+6,y+28,2);
   tft.drawString(s,x+28,y+28,2);
-  snprintf(s,sizeof(s),"%.0fW",d.battPower);
-  tft.drawString("P:",x+6,y+44,2);
-  tft.drawString(s,x+28,y+44,2);
 }
 
 static void drawTemps(const BMSData& d) {
-  // Right side panel - bottom (below stats)
-  int x=220, y=TOP_PAD+SOC_BAR_H+STATS_BLOCK_H+8;
+  // Right side panel - temps below stats (textSize 1 = 12px per line)
+  int x=220, y=TOP_PAD+SOC_BAR_H+40+14;
   tft.setTextColor(CLR_CYAN);
   tft.drawString("TEMP",x,y,1);
   y+=10;
@@ -470,21 +467,12 @@ static void drawTemps(const BMSData& d) {
   uint16_t tc=CLR_WHITE;
   if(d.battT1>55.0f) tc=CLR_RED;
   else if(d.battT1<0.0f) tc=CLR_YELLOW;
-  snprintf(s,sizeof(s),"  T1: %.1f C",d.battT1);
+  snprintf(s,sizeof(s),"T1: %.1f C",d.battT1);
   tft.setTextColor(tc);
   tft.drawString(s,x,y,2);
-  y+=24;
-  snprintf(s,sizeof(s)," MOS: %.1f C",d.mosTemp);
-  tft.drawString(s,x,y,2);
-  // Balance + uptime info below temps
   y+=14;
-  snprintf(s,sizeof(s),"Bal: %d",d.balancingAction);
-  tft.setTextColor(CLR_AMBER);
-  tft.drawString(s,x,y,1);
-  y+=12;
-  snprintf(s,sizeof(s)," %ud %uh %um",d.uptimeDays,d.uptimeHrs,d.uptimeMin);
-  tft.setTextColor(CLR_GRAY);
-  tft.drawString(s,x,y,1);
+  snprintf(s,sizeof(s),"MOS: %.1f C",d.mosTemp);
+  tft.drawString(s,x,y,2);
 }
 
 static uint16_t btnColor(bool active, int type) {
