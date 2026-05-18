@@ -65,6 +65,7 @@ static const int  NUM_BMS        = 2;
 #define CELL_ROWS   4
 #define CELL_ROW_H  26
 #define STATS_BLOCK_H 68
+#define CTRL_BTN_H  36
 #define PADDING     8
 #define TOP_PAD     (HEADER_H + SOC_BAR_H)
 
@@ -363,7 +364,7 @@ static void drawHeader(const BMSData& d) {
 
   // Battery label
   tft.setTextColor(CLR_WHITE, CLR_HEADER_BG);
-  tft.drawString(String("BATTERY ") + (navState.currentPage + 1), PAD, HEADER_H/2-6, 2);
+  tft.drawString(String("BATTERY ") + (navState.currentPage + 1), PADDING, HEADER_H/2-6, 2);
 
   // Page dots
   int dotY = HEADER_H/2 + 4;
@@ -387,13 +388,13 @@ static void drawHeader(const BMSData& d) {
   tft.setTextSize(1);
   if (wifiConnected && anyConnected) {
     tft.setTextColor(CLR_GREEN, CLR_HEADER_BG);
-    tft.drawRightString("CONNECTED", SCREEN_W-PAD-20, HEADER_H/2-6, 2);
+    tft.drawRightString("CONNECTED", SCREEN_W-PADDING-20, HEADER_H/2-6, 2);
   } else if (wifiConnected) {
     tft.setTextColor(CLR_AMBER, CLR_HEADER_BG);
-    tft.drawRightString("SCANNING...", SCREEN_W-PAD-20, HEADER_H/2-6, 2);
+    tft.drawRightString("SCANNING...", SCREEN_W-PADDING-20, HEADER_H/2-6, 2);
   } else {
     tft.setTextColor(CLR_RED, CLR_HEADER_BG);
-    tft.drawRightString("NO WIFI", SCREEN_W-PAD-20, HEADER_H/2-6, 2);
+    tft.drawRightString("NO WIFI", SCREEN_W-PADDING-20, HEADER_H/2-6, 2);
   }
 }
 
@@ -829,7 +830,7 @@ void setup() {
   tft.setTextColor(CLR_WHITE);
   tft.setTextSize(1);
   tft.drawCentreString("CYD Monitor", SCREEN_W/2, 160, 2);
-  tft.drawString("Initializing...", PAD, 230, 2);
+  tft.drawString("Initializing...", PADDING, 230, 2);
 
   // Touch
   touchscreen.begin();
@@ -856,20 +857,20 @@ void setup() {
     if (att % 6 == 0) {
       char s[40];
       snprintf(s, sizeof(s), "WiFi %d/30", att);
-      tft.drawString(s, PAD, 230, 2);
+      tft.drawString(s, PADDING, 230, 2);
     }
   }
   if (WiFi.status() == WL_CONNECTED) {
     wifiConnected = true;
     DBG_PRINTLN("\nWiFi connected!");
     DBG_PRINTF("IP: %s\n", WiFi.localIP().toString().c_str());
-    tft.drawString("WiFi OK", PAD, 230, 2);
+    tft.drawString("WiFi OK", PADDING, 230, 2);
     tft.setTextColor(CLR_GREEN);
-    tft.drawString(WiFi.localIP().toString().c_str(), PAD, 250, 2);
+    tft.drawString(WiFi.localIP().toString().c_str(), PADDING, 250, 2);
   } else {
     DBG_PRINTLN("\nWiFi failed!");
     tft.setTextColor(CLR_RED);
-    tft.drawString("WiFi FAILED", PAD, 230, 2);
+    tft.drawString("WiFi FAILED", PADDING, 230, 2);
   }
 
   // Web server
