@@ -43,8 +43,8 @@ static const int  NUM_BMS        = 2;
 #endif
 
 // ===================== Display Constants =====================
-#define SCREEN_W 240
-#define SCREEN_H 320
+#define SCREEN_W 320
+#define SCREEN_H 240
 
 #define PIN_TFT_MOSI 23
 #define PIN_TFT_SCLK 18
@@ -55,16 +55,16 @@ static const int  NUM_BMS        = 2;
 #define PIN_TOUCH_CS 33
 #define PIN_TOUCH_IRQ 36
 
-#define TOUCH_MIN_X 200
-#define TOUCH_MAX_X 3700
-#define TOUCH_MIN_Y 240
-#define TOUCH_MAX_Y 3800
+#define TOUCH_MIN_X 240
+#define TOUCH_MAX_X 3800
+#define TOUCH_MIN_Y 200
+#define TOUCH_MAX_Y 3700
 
 #define HEADER_H    32
 #define SOC_BAR_H   28
 #define CELL_ROWS   4
-#define CELL_ROW_H  26
-#define STATS_BLOCK_H 68
+#define CELL_ROW_H  28
+#define STATS_BLOCK_H 56
 #define CTRL_BTN_H  36
 #define PADDING     8
 #define TOP_PAD     (HEADER_H + SOC_BAR_H)
@@ -365,25 +365,27 @@ static void drawHeader(const BMSData& d) {
   char pageLabel[16];
   snprintf(pageLabel, sizeof(pageLabel), "BATTERY %d", navState.currentPage + 1);
   tft.setTextColor(CLR_WHITE, CLR_HEADER_BG);
-  tft.drawString(pageLabel, 84, 8, 2);
+  int labelX = (SCREEN_W - 8 * strlen(pageLabel)) / 2;
+  tft.drawString(pageLabel, labelX, 8, 2);
 
   // Left arrow button (previous page) - on left edge
   if (navState.currentPage > 0) {
-    tft.fillRect(2, 2, 38, 28, CLR_DARK_BLUE);
-    tft.drawRect(2, 2, 38, 28, CLR_BLUE);
+    tft.fillRect(2, 2, 36, 28, CLR_DARK_BLUE);
+    tft.drawRect(2, 2, 36, 28, CLR_BLUE);
     tft.setTextColor(CLR_WHITE, CLR_DARK_BLUE);
     tft.drawString("<", 13, 6, 3);
   }
 
   // Right arrow button (next page) - on right edge
   if (navState.currentPage < NUM_BMS - 1) {
-    tft.fillRect(SCREEN_W - 40, 2, 38, 28, CLR_DARK_GREEN);
-    tft.drawRect(SCREEN_W - 40, 2, 38, 28, CLR_GREEN);
+    int ax = SCREEN_W - 38;
+    tft.fillRect(ax, 2, 36, 28, CLR_DARK_GREEN);
+    tft.drawRect(ax, 2, 36, 28, CLR_GREEN);
     tft.setTextColor(CLR_WHITE, CLR_DARK_GREEN);
-    tft.drawString(">", SCREEN_W - 29, 6, 3);
+    tft.drawString(">", ax + 12, 6, 3);
   }
 
-  // Connection status indicator (dot at bottom-right)
+  // Connection status indicator (dot at bottom-center)
   uint16_t dotColor;
   if (wifiConnected) {
     bool anyConnected = false;
@@ -396,8 +398,8 @@ static void drawHeader(const BMSData& d) {
   } else {
     dotColor = CLR_RED;
   }
-  tft.fillCircle(175, 24, 6, dotColor);
-  tft.drawCircle(175, 24, 6, CLR_HEADER_BG);
+  tft.fillCircle(SCREEN_W/2, 24, 5, dotColor);
+  tft.drawCircle(SCREEN_W/2, 24, 5, CLR_HEADER_BG);
 }
 
 static void drawSOCBar(const BMSData& d) {
@@ -426,6 +428,7 @@ static void drawCellVoltages(const BMSData& d) {
   tft.setTextColor(CLR_CYAN);
   tft.drawString("CELL VOLTAGES",x,y,1);
   y+=10;
+  // Divider line
   tft.drawLine(x,y,SCREEN_W-PADDING,y,CLR_DARK_GRAY);
   y+=4;
   for(int i=0;i<d.cellCount && i<CELL_ROWS;i++) {
@@ -438,28 +441,30 @@ static void drawCellVoltages(const BMSData& d) {
 }
 
 static void drawBatteryStats(const BMSData& d) {
-  int x=SCREEN_W/2+4, y=TOP_PAD+SOC_BAR_H+10;
-  tft.fillRect(x,y-6,SCREEN_W/2-8,STATS_BLOCK_H,CLR_CARD_BG);
-  tft.drawRect(x,y-6,SCREEN_W/2-8,STATS_BLOCK_H,CLR_DARK_GRAY);
+  // Right side panel - top
+  int x=220, y=TOP_PAD+SOC_BAR_H+10;
+  tft.fillRect(x,y-6,90,STATS_BLOCK_H,CLR_CARD_BG);
+  tft.drawRect(x,y-6,90,STATS_BLOCK_H,CLR_DARK_GRAY);
   tft.setTextColor(CLR_CYAN,CLR_CARD_BG);
-  tft.drawString("BATTERY",x+6,y,1);
+  tft.drawString("STATS",x+6,y,1);
   char s[24];
   snprintf(s,sizeof(s),"%.1fV",d.battVoltage);
   tft.setTextColor(CLR_WHITE,CLR_CARD_BG);
-  tft.drawString("V: ",x+6,y+12,2);
-  tft.drawString(s,x+30,y+12,2);
+  tft.drawString("V:",x+6,y+12,2);
+  tft.drawString(s,x+28,y+12,2);
   snprintf(s,sizeof(s),"%.1fA",d.chargeCurrent);
-  tft.drawString("I: ",x+6,y+28,2);
-  tft.drawString(s,x+30,y+28,2);
+  tft.drawString("I:",x+6,y+28,2);
+  tft.drawString(s,x+28,y+28,2);
   snprintf(s,sizeof(s),"%.0fW",d.battPower);
-  tft.drawString("P: ",x+6,y+44,2);
-  tft.drawString(s,x+30,y+44,2);
+  tft.drawString("P:",x+6,y+44,2);
+  tft.drawString(s,x+28,y+44,2);
 }
 
 static void drawTemps(const BMSData& d) {
-  int x=SCREEN_W/2+4, y=TOP_PAD+SOC_BAR_H+STATS_BLOCK_H+6;
+  // Right side panel - bottom (below stats)
+  int x=220, y=TOP_PAD+SOC_BAR_H+STATS_BLOCK_H+8;
   tft.setTextColor(CLR_CYAN);
-  tft.drawString("TEMPERATURE",x,y,1);
+  tft.drawString("TEMP",x,y,1);
   y+=10;
   char s[24];
   uint16_t tc=CLR_WHITE;
@@ -468,9 +473,18 @@ static void drawTemps(const BMSData& d) {
   snprintf(s,sizeof(s),"  T1: %.1f C",d.battT1);
   tft.setTextColor(tc);
   tft.drawString(s,x,y,2);
-  y+=20;
+  y+=24;
   snprintf(s,sizeof(s)," MOS: %.1f C",d.mosTemp);
   tft.drawString(s,x,y,2);
+  // Balance + uptime info below temps
+  y+=14;
+  snprintf(s,sizeof(s),"Bal: %d",d.balancingAction);
+  tft.setTextColor(CLR_AMBER);
+  tft.drawString(s,x,y,1);
+  y+=12;
+  snprintf(s,sizeof(s)," %ud %uh %um",d.uptimeDays,d.uptimeHrs,d.uptimeMin);
+  tft.setTextColor(CLR_GRAY);
+  tft.drawString(s,x,y,1);
 }
 
 static uint16_t btnColor(bool active, int type) {
@@ -503,17 +517,6 @@ static void drawControls(const BMSData& d) {
   tft.drawCentreString("BALANCE",bx+bw/2,y+CTRL_BTN_H/2-6,2);
 }
 
-static void drawStatusLine(const BMSData& d) {
-  int x=PADDING, y=SCREEN_H-CTRL_BTN_H-18;
-  char s[64];
-  snprintf(s,sizeof(s),"Bal: %d",d.balancingAction);
-  tft.setTextColor(CLR_AMBER);
-  tft.drawString(s,x,y,1);
-  snprintf(s,sizeof(s),"Uptime: %ud %uh %um",d.uptimeDays,d.uptimeHrs,d.uptimeMin);
-  tft.setTextColor(CLR_GRAY);
-  tft.drawString(s,SCREEN_W/2,y,1);
-}
-
 static void drawScreen(const BMSData& d) {
   tft.fillScreen(CLR_BLACK);
   drawHeader(d);
@@ -521,7 +524,6 @@ static void drawScreen(const BMSData& d) {
   drawCellVoltages(d);
   drawBatteryStats(d);
   drawTemps(d);
-  drawStatusLine(d);
   drawControls(d);
 }
 
@@ -793,7 +795,7 @@ void setup() {
 
   // TFT
   tft.init();
-  tft.setRotation(0);
+  tft.setRotation(1);
   tft.fillScreen(CLR_BLACK);
   tft.setTextColor(CLR_CYAN);
   tft.setTextSize(2);
@@ -805,7 +807,7 @@ void setup() {
 
   // Touch
   touchscreen.begin();
-  touchscreen.setRotation(0);
+  touchscreen.setRotation(1);
 
   // LittleFS
   if (!LittleFS.begin(true)) {
