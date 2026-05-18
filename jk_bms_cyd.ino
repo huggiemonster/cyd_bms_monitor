@@ -7,7 +7,7 @@
  * and displays battery status on the CYD 2.4" TFT touchscreen.
  *
  * Based on: https://github.com/peff74/Arduino-jk-bms
- * Modified: Added CYD display + touch controls
+ * Modified: Added CYD display + touch controls + multi-BMS pagination
  */
 
 #include <Arduino.h>
@@ -24,7 +24,9 @@
 
 static const char WiFi_SSID[]    = "YOUR_WIFI_SSID";
 static const char WiFi_Password[] = "YOUR_WIFI_PASSWORD";
-static const char BMS_MAC[]      = "20:22:08:25:26:8b"; // Change to your BMS MAC
+static const char BMS_MAC_1[]    = "00:00:00:00:00:00"; // Battery 1 MAC
+static const char BMS_MAC_2[]    = "00:00:00:00:00:00"; // Battery 2 MAC
+static const int  NUM_BMS        = 2;
 
 #define DISPLAY_REFRESH_INTERVAL 500
 #define TOUCH_DEBOUNCE_MS 200
@@ -63,9 +65,8 @@ static const char BMS_MAC[]      = "20:22:08:25:26:8b"; // Change to your BMS MA
 #define CELL_ROWS   4
 #define CELL_ROW_H  26
 #define STATS_BLOCK_H 68
-#define CTRL_BTN_H  36
-#define PAD 8
-#define TOP_PAD (HEADER_H + SOC_BAR_H)
+#define PADDING     8
+#define TOP_PAD     (HEADER_H + SOC_BAR_H)
 
 // ===================== Colors =====================
 #define CLR_BLACK        0x0000
@@ -88,7 +89,6 @@ static const char BMS_MAC[]      = "20:22:08:25:26:8b"; // Change to your BMS MA
 // ===================== Data Structures =====================
 struct BMSData {
   float cellVoltage[16] = {0};
-  float wireResist[16]  = {0};
   int   cellCount       = 4;
   float avgCellVoltage  = 0;
   float deltaCellVoltage= 0;
@@ -100,7 +100,6 @@ struct BMSData {
   float capacityRemain  = 0;
   float nominalCapacity = 0;
   float cycleCount      = 0;
-  float cycleCapacity   = 0;
   float battT1          = 0;
   float battT2          = 0;
   float mosTemp         = 0;
@@ -115,15 +114,15 @@ struct BMSData {
   bool  newFrame        = false;
 };
 
-struct BMSData bms;
-
 // ===================== Global Objects =====================
 TFT_eSPI tft = TFT_eSPI();
 XPT2046_Touchscreen touchscreen(PIN_TOUCH_CS);
 WebServer server(80);
 
-bool wifiConnected  = false;
-bool bmsConnected   = false;
+BMSData bms[NUM_BMS];  // Multi-BMS data
+int currentPage = 0;   // Current page (0 or 1)
+
+bool wifiConnected = false;
 unsigned long lastDrawTime = 0;
 unsigned long lastScanTime = 0;
 unsigned long uptimeStart  = 0;
@@ -132,12 +131,12 @@ unsigned long totalUptime  = 0;
 // Touch
 struct { int16_t x = -1, y = -1; bool touched = false; unsigned long lastTime = 0; } touch;
 
-// Control
-struct { int type = -1; bool pending = false; bool writing = false; } ctrlPending;
-
-// ===================== Helpers =====================
-static int16_t mapTx(int16_t r) { return map(r, TOUCH_MIN_X, TOUCH_MAX_X, 0, SCREEN_W); }
-static int16_t mapTy(int16_t r) { return map(r, TOUCH_MIN_Y, TOUCH_MAX_Y, 0, SCREEN_H); }
+// Page navigation state
+struct {
+  int currentPage = 0;
+  bool writing    = false;
+  int  controlType = -1;
+} navState;
 
 // ===================== JKBMS Class =====================
 class JKBMS {
@@ -152,22 +151,16 @@ public:
   int    frame = 0, ignoreNotifyCount = 0;
   bool   received_start = false, received_complete = false, new_data = false;
 
-  float cellVoltage[16] = {0}, wireResist[16] = {0};
+  float cellVoltage[16] = {0};
   float Average_Cell_Voltage=0, Delta_Cell_Voltage=0;
   float Battery_Voltage=0, Battery_Power=0, Charge_Current=0;
   float Battery_T1=0, Battery_T2=0, MOS_Temp=0, Balance_Curr=0;
   int Percent_Remain=0, Balancing_Action=0;
-  float Capacity_Remain=0, Nominal_Capacity=0, Cycle_Count=0, Cycle_Capacity=0;
+  float Capacity_Remain=0, Nominal_Capacity=0, Cycle_Count=0;
   uint32_t Uptime=0; uint8_t sec=0, mi=0, hr=0, days=0;
   bool Charge=false, Discharge=false, Balance=false;
   int cell_count=4;
-  float total_battery_capacity=0, balance_starting_voltage=0;
-  float cell_voltage_undervoltage_protection=0;
-  float cell_voltage_undervoltage_recovery=0;
-  float cell_voltage_overvoltage_protection=0;
-  float cell_voltage_overvoltage_recovery=0;
-  float max_charge_current=0;
-  float max_discharge_current=0;
+  float total_battery_capacity=0;
 
   bool connectToServer();
   void parseData();
@@ -182,26 +175,35 @@ private:
   }
 };
 
-JKBMS jkBms(BMS_MAC);
+JKBMS* jkBmsDevices[NUM_BMS] = { nullptr, nullptr };
 
 // ===================== BLE Callbacks =====================
 NimBLEScan* pScan;
 
 class ClientCallbacks : public NimBLEClientCallbacks {
+  JKBMS* parent;
+public:
+  ClientCallbacks(JKBMS* p) : parent(p) {}
   void onConnect(NimBLEClient* pClient) override { DBG_PRINTLN("BLE connected"); }
   void onDisconnect(NimBLEClient* pClient, int reason) override {
     DBG_PRINTF("BLE disconnected, reason: %d\n", reason);
-    jkBms.connected = false; jkBms.doConnect = false;
+    parent->connected = false;
+    parent->doConnect = false;
   }
 };
 
 class ScanCallbacks : public NimBLEScanCallbacks {
   void onResult(const NimBLEAdvertisedDevice* adv) override {
-    if (adv->getAddress().toString() == jkBms.targetMAC && !jkBms.connected && !jkBms.doConnect) {
-      DBG_PRINTF("Found BMS: %s\n", BMS_MAC);
-      jkBms.advDevice = adv;
-      jkBms.doConnect = true;
-      NimBLEDevice::getScan()->stop();
+    for (int i = 0; i < NUM_BMS; i++) {
+      if (jkBmsDevices[i] == nullptr) continue;
+      if (adv->getAddress().toString() == jkBmsDevices[i]->targetMAC &&
+          !jkBmsDevices[i]->connected && !jkBmsDevices[i]->doConnect) {
+        DBG_PRINTF("Found BMS %d: %s\n", i, jkBmsDevices[i]->targetMAC.c_str());
+        jkBmsDevices[i]->advDevice = adv;
+        jkBmsDevices[i]->doConnect = true;
+        NimBLEDevice::getScan()->stop();
+        break;
+      }
     }
   }
 };
@@ -209,7 +211,12 @@ class ScanCallbacks : public NimBLEScanCallbacks {
 static ScanCallbacks scanCallbacksInstance;
 
 void notifyCB(NimBLERemoteCharacteristic* pChr, uint8_t* pData, size_t length, bool isNotify) {
-  jkBms.handleNotification(pData, length);
+  for (int i = 0; i < NUM_BMS; i++) {
+    if (jkBmsDevices[i] != nullptr && jkBmsDevices[i]->pChr == pChr) {
+      jkBmsDevices[i]->handleNotification(pData, length);
+      break;
+    }
+  }
 }
 
 // ===================== JKBMS Methods =====================
@@ -219,7 +226,7 @@ bool JKBMS::connectToServer() {
   if (!pClient) {
     pClient = NimBLEDevice::createClient();
     DBG_PRINTLN("New BLE client");
-    pClient->setClientCallbacks(new ClientCallbacks(), true);
+    pClient->setClientCallbacks(new ClientCallbacks(this), true);
     pClient->setConnectionParams(12, 12, 0, 150);
     pClient->setConnectTimeout(5000);
   }
@@ -278,13 +285,8 @@ void JKBMS::writeRegister(uint8_t address, uint32_t value, uint8_t length) {
 }
 
 void JKBMS::bms_settings() {
-  cell_voltage_undervoltage_protection = ((receivedBytes[13]<<24|receivedBytes[12]<<16|receivedBytes[11]<<8|receivedBytes[10])*0.001);
-  cell_voltage_overvoltage_protection  = ((receivedBytes[21]<<24|receivedBytes[20]<<16|receivedBytes[19]<<8|receivedBytes[18])*0.001);
-  max_charge_current                   = ((receivedBytes[53]<<24|receivedBytes[52]<<16|receivedBytes[51]<<8|receivedBytes[50])*0.001);
-  max_discharge_current                = ((receivedBytes[65]<<24|receivedBytes[64]<<16|receivedBytes[63]<<8|receivedBytes[62])*0.001);
-  total_battery_capacity               = ((receivedBytes[133]<<24|receivedBytes[132]<<16|receivedBytes[131]<<8|receivedBytes[130])*0.001);
-  cell_count                           = (receivedBytes[117]<<24|receivedBytes[116]<<16|receivedBytes[115]<<8|receivedBytes[114]);
-  balance_starting_voltage             = ((receivedBytes[141]<<24|receivedBytes[140]<<16|receivedBytes[139]<<8|receivedBytes[138])*0.001);
+  cell_count = (receivedBytes[117]<<24|receivedBytes[116]<<16|receivedBytes[115]<<8|receivedBytes[114]);
+  total_battery_capacity = ((receivedBytes[133]<<24|receivedBytes[132]<<16|receivedBytes[131]<<8|receivedBytes[130])*0.001);
   DBG_PRINTF("Settings: %d cells, %.2fAh\n", cell_count, total_battery_capacity);
 }
 
@@ -292,7 +294,7 @@ void JKBMS::parseDeviceInfo() {
   new_data=false;
   if(frame<134) return;
   Uptime=(receivedBytes[41]<<24)|(receivedBytes[40]<<16)|(receivedBytes[39]<<8)|receivedBytes[38];
-  DBG_PRINTF("Device info received, uptime=%lu s\n", Uptime);
+  DBG_PRINTF("Device info, uptime=%lu s\n", Uptime);
 }
 
 void JKBMS::parseData() {
@@ -301,8 +303,6 @@ void JKBMS::parseData() {
     cellVoltage[j]=(uint16_t)(receivedBytes[i]|(receivedBytes[i-1]<<8))*0.001;
   Average_Cell_Voltage  =((uint16_t)(receivedBytes[75]|(receivedBytes[74]<<8)))*0.001;
   Delta_Cell_Voltage    =((uint16_t)(receivedBytes[77]|(receivedBytes[76]<<8)))*0.001;
-  for(int j=0,i=81;i<112&&j<16;j++,i+=2)
-    wireResist[j]=((uint16_t)(receivedBytes[i]|(receivedBytes[i-1]<<8)))*0.001;
   MOS_Temp=(((uint16_t)(receivedBytes[145]|(receivedBytes[144]<<8)))*0.1);
   Battery_Voltage =((uint32_t)receivedBytes[153]<<24|(uint32_t)receivedBytes[152]<<16|(uint32_t)receivedBytes[151]<<8|receivedBytes[150])*0.001;
   Charge_Current  =((uint32_t)receivedBytes[161]<<24|(uint32_t)receivedBytes[160]<<16|(uint32_t)receivedBytes[159]<<8|receivedBytes[158])*0.001;
@@ -316,7 +316,6 @@ void JKBMS::parseData() {
   Capacity_Remain =((uint32_t)receivedBytes[177]<<24|(uint32_t)receivedBytes[176]<<16|(uint32_t)receivedBytes[175]<<8|receivedBytes[174])*0.001;
   Nominal_Capacity=((uint32_t)receivedBytes[181]<<24|(uint32_t)receivedBytes[180]<<16|(uint32_t)receivedBytes[179]<<8|receivedBytes[178])*0.001;
   Cycle_Count     =((uint32_t)receivedBytes[185]<<24|(uint32_t)receivedBytes[184]<<16|(uint32_t)receivedBytes[183]<<8|receivedBytes[182]);
-  Cycle_Capacity  =((uint32_t)receivedBytes[189]<<24|(uint32_t)receivedBytes[188]<<16|(uint32_t)receivedBytes[187]<<8|receivedBytes[186])*0.001;
   Uptime          =receivedBytes[196]<<16|receivedBytes[195]<<8|receivedBytes[194];
   sec=Uptime%60; Uptime/=60; mi=Uptime%60; Uptime/=60; hr=Uptime%24; days=Uptime/24;
   Charge  =receivedBytes[198]>0;
@@ -324,67 +323,91 @@ void JKBMS::parseData() {
   Balance =receivedBytes[201]>0;
   DBG_PRINTLN("--- BMS Data ---");
   DBG_PRINTF("V=%.2fV I=%.2fA SOC=%d%%\n", Battery_Voltage, Charge_Current, Percent_Remain);
-  for(int j=0;j<cell_count&&j<16;j++) DBG_PRINTF("  C%d: %.3fV\n",j+1,cellVoltage[j]);
 }
 
 // ===================== Sync BLE → Display =====================
-static void syncBMSData() {
-  bms.cellCount      = jkBms.cell_count;
-  for(int i=0;i<16;i++) { bms.cellVoltage[i]=jkBms.cellVoltage[i]; bms.wireResist[i]=jkBms.wireResist[i]; }
-  bms.avgCellVoltage   = jkBms.Average_Cell_Voltage;
-  bms.deltaCellVoltage = jkBms.Delta_Cell_Voltage;
-  bms.battVoltage      = jkBms.Battery_Voltage;
-  bms.battPower        = jkBms.Battery_Power;
-  bms.chargeCurrent    = jkBms.Charge_Current;
-  bms.balanceCurrent   = jkBms.Balance_Curr;
-  bms.battT1           = jkBms.Battery_T1;
-  bms.battT2           = jkBms.Battery_T2;
-  bms.mosTemp          = jkBms.MOS_Temp;
-  bms.percentRemain    = jkBms.Percent_Remain;
-  bms.capacityRemain   = jkBms.Capacity_Remain;
-  bms.nominalCapacity  = jkBms.Nominal_Capacity;
-  bms.cycleCount       = jkBms.Cycle_Count;
-  bms.cycleCapacity    = jkBms.Cycle_Capacity;
-  bms.uptimeSec        = jkBms.Uptime;
-  bms.uptimeDays       = jkBms.days;
-  bms.uptimeHrs        = jkBms.hr;
-  bms.uptimeMin        = jkBms.mi;
-  bms.charge           = jkBms.Charge;
-  bms.discharge        = jkBms.Discharge;
-  bms.balance          = jkBms.Balance;
-  bms.balancingAction  = jkBms.Balancing_Action;
-  bms.newFrame         = jkBms.new_data;
+static void syncBMSData(int idx) {
+  if (jkBmsDevices[idx] == nullptr) return;
+  BMSData& d = bms[idx];
+  d.cellCount      = jkBmsDevices[idx]->cell_count;
+  for(int i=0;i<d.cellCount && i<16;i++) {
+    d.cellVoltage[i] = jkBmsDevices[idx]->cellVoltage[i];
+  }
+  d.avgCellVoltage   = jkBmsDevices[idx]->Average_Cell_Voltage;
+  d.deltaCellVoltage = jkBmsDevices[idx]->Delta_Cell_Voltage;
+  d.battVoltage      = jkBmsDevices[idx]->Battery_Voltage;
+  d.battPower        = jkBmsDevices[idx]->Battery_Power;
+  d.chargeCurrent    = jkBmsDevices[idx]->Charge_Current;
+  d.balanceCurrent   = jkBmsDevices[idx]->Balance_Curr;
+  d.battT1           = jkBmsDevices[idx]->Battery_T1;
+  d.battT2           = jkBmsDevices[idx]->Battery_T2;
+  d.mosTemp          = jkBmsDevices[idx]->MOS_Temp;
+  d.percentRemain    = jkBmsDevices[idx]->Percent_Remain;
+  d.capacityRemain   = jkBmsDevices[idx]->Capacity_Remain;
+  d.nominalCapacity  = jkBmsDevices[idx]->Nominal_Capacity;
+  d.cycleCount       = jkBmsDevices[idx]->Cycle_Count;
+  d.uptimeSec        = jkBmsDevices[idx]->Uptime;
+  d.uptimeDays       = jkBmsDevices[idx]->days;
+  d.uptimeHrs        = jkBmsDevices[idx]->hr;
+  d.uptimeMin        = jkBmsDevices[idx]->mi;
+  d.charge           = jkBmsDevices[idx]->Charge;
+  d.discharge        = jkBmsDevices[idx]->Discharge;
+  d.balance          = jkBmsDevices[idx]->Balance;
+  d.balancingAction  = jkBmsDevices[idx]->Balancing_Action;
+  d.newFrame         = jkBmsDevices[idx]->new_data;
 }
 
 // ===================== Display Drawing =====================
-static void drawHeader() {
+static void drawHeader(const BMSData& d) {
   tft.fillRect(0,0,SCREEN_W,HEADER_H,CLR_HEADER_BG);
-  tft.setTextColor(CLR_WHITE,CLR_HEADER_BG);
-  tft.drawString("JK-BMS Monitor",PAD,HEADER_H/2-6,2);
+
+  // Battery label
+  tft.setTextColor(CLR_WHITE, CLR_HEADER_BG);
+  tft.drawString(String("BATTERY ") + (navState.currentPage + 1), PAD, HEADER_H/2-6, 2);
+
+  // Page dots
+  int dotY = HEADER_H/2 + 4;
+  for (int i = 0; i < NUM_BMS; i++) {
+    int dotX = SCREEN_W/2 - (NUM_BMS-1)*8 + i*16;
+    if (i == navState.currentPage) {
+      tft.fillCircle(dotX, dotY, 4, CLR_GREEN);
+    } else {
+      tft.fillCircle(dotX, dotY, 3, CLR_DARK_GRAY);
+    }
+  }
+
+  // Connection status
+  bool anyConnected = false;
+  for (int i = 0; i < NUM_BMS; i++) {
+    if (jkBmsDevices[i] != nullptr && jkBmsDevices[i]->connected) {
+      anyConnected = true; break;
+    }
+  }
+
   tft.setTextSize(1);
-  if(wifiConnected && bmsConnected) {
-    tft.setTextColor(CLR_GREEN,CLR_HEADER_BG);
-    tft.drawCentreString("CONNECTED",SCREEN_W/2,HEADER_H/2-6,2);
-  } else if(wifiConnected) {
-    tft.setTextColor(CLR_AMBER,CLR_HEADER_BG);
-    tft.drawCentreString("SCANNING...",SCREEN_W/2,HEADER_H/2-6,2);
+  if (wifiConnected && anyConnected) {
+    tft.setTextColor(CLR_GREEN, CLR_HEADER_BG);
+    tft.drawRightString("CONNECTED", SCREEN_W-PAD-20, HEADER_H/2-6, 2);
+  } else if (wifiConnected) {
+    tft.setTextColor(CLR_AMBER, CLR_HEADER_BG);
+    tft.drawRightString("SCANNING...", SCREEN_W-PAD-20, HEADER_H/2-6, 2);
   } else {
-    tft.setTextColor(CLR_RED,CLR_HEADER_BG);
-    tft.drawCentreString("NO WIFI",SCREEN_W/2,HEADER_H/2-6,2);
+    tft.setTextColor(CLR_RED, CLR_HEADER_BG);
+    tft.drawRightString("NO WIFI", SCREEN_W-PAD-20, HEADER_H/2-6, 2);
   }
 }
 
-static void drawSOCBar() {
-  int y=TOP_PAD, barW=SCREEN_W-PAD*2, barH=SOC_BAR_H-8, x=PAD+4;
+static void drawSOCBar(const BMSData& d) {
+  int y=TOP_PAD, barW=SCREEN_W-PADDING*2, barH=SOC_BAR_H-8, x=PADDING+4;
   char lbl[16];
-  snprintf(lbl,sizeof(lbl),"SOC %d%%",bms.percentRemain);
+  snprintf(lbl,sizeof(lbl),"SOC %d%%",d.percentRemain);
   tft.setTextColor(CLR_WHITE);
-  tft.drawString(lbl,PAD,y,1);
+  tft.drawString(lbl,PADDING,y,1);
   tft.fillRect(x,y+2,barW,barH,CLR_DARK_GRAY);
-  int fw=(barW*bms.percentRemain)/100; fw=constrain(fw,0,barW);
+  int fw=(barW*d.percentRemain)/100; fw=constrain(fw,0,barW);
   uint16_t sc=CLR_GREEN;
-  if(bms.percentRemain<=10) sc=CLR_RED;
-  else if(bms.percentRemain<=25) sc=CLR_YELLOW;
+  if(d.percentRemain<=10) sc=CLR_RED;
+  else if(d.percentRemain<=25) sc=CLR_YELLOW;
   tft.fillRect(x,y+2,fw,barH,sc);
   tft.drawRect(x,y+2,barW,barH,CLR_LIGHT_GRAY);
 }
@@ -395,66 +418,55 @@ static uint16_t cellColor(float v) {
   return CLR_GREEN;
 }
 
-static void drawCellVoltages() {
-  int x=PAD, y=TOP_PAD+SOC_BAR_H;
+static void drawCellVoltages(const BMSData& d) {
+  int x=PADDING, y=TOP_PAD+SOC_BAR_H;
   tft.setTextColor(CLR_CYAN);
   tft.drawString("CELL VOLTAGES",x,y,1);
   y+=10;
-  tft.drawLine(x,y,SCREEN_W-PAD,y,CLR_DARK_GRAY);
+  tft.drawLine(x,y,SCREEN_W-PADDING,y,CLR_DARK_GRAY);
   y+=4;
-  for(int i=0;i<bms.cellCount&&i<CELL_ROWS;i++) {
-    char line[40];
-    snprintf(line,sizeof(line),"  C%d: %.3fV",i+1,bms.cellVoltage[i]);
-    tft.setTextColor(cellColor(bms.cellVoltage[i]));
+  for(int i=0;i<d.cellCount && i<CELL_ROWS;i++) {
+    char line[32];
+    snprintf(line,sizeof(line),"  C%d: %.3fV",i+1,d.cellVoltage[i]);
+    tft.setTextColor(cellColor(d.cellVoltage[i]));
     tft.drawString(line,x+4,y,2);
-    snprintf(line,sizeof(line),"     R: %.3f ohm",bms.wireResist[i]);
-    tft.setTextColor(CLR_GRAY);
-    tft.drawString(line,x+4,y+12,1);
     y+=CELL_ROW_H;
   }
 }
 
-static void drawBatteryStats() {
+static void drawBatteryStats(const BMSData& d) {
   int x=SCREEN_W/2+4, y=TOP_PAD+SOC_BAR_H+10;
   tft.fillRect(x,y-6,SCREEN_W/2-8,STATS_BLOCK_H,CLR_CARD_BG);
   tft.drawRect(x,y-6,SCREEN_W/2-8,STATS_BLOCK_H,CLR_DARK_GRAY);
   tft.setTextColor(CLR_CYAN,CLR_CARD_BG);
   tft.drawString("BATTERY",x+6,y,1);
   char s[24];
-  snprintf(s,sizeof(s),"%.1fV",bms.battVoltage);
+  snprintf(s,sizeof(s),"%.1fV",d.battVoltage);
   tft.setTextColor(CLR_WHITE,CLR_CARD_BG);
   tft.drawString("V: ",x+6,y+12,2);
   tft.drawString(s,x+30,y+12,2);
-  snprintf(s,sizeof(s),"%.1fA",bms.chargeCurrent);
+  snprintf(s,sizeof(s),"%.1fA",d.chargeCurrent);
   tft.drawString("I: ",x+6,y+28,2);
   tft.drawString(s,x+30,y+28,2);
-  snprintf(s,sizeof(s),"%.0fW",bms.battPower);
+  snprintf(s,sizeof(s),"%.0fW",d.battPower);
   tft.drawString("P: ",x+6,y+44,2);
   tft.drawString(s,x+30,y+44,2);
-  snprintf(s,sizeof(s),"%.1f/%.1fAh",bms.capacityRemain,bms.nominalCapacity);
-  tft.drawString("Cap:",x+6,y+56,1);
-  tft.setTextColor(CLR_AMBER,CLR_CARD_BG);
-  tft.drawString(s,x+30,y+56,1);
 }
 
-static void drawTemps() {
+static void drawTemps(const BMSData& d) {
   int x=SCREEN_W/2+4, y=TOP_PAD+SOC_BAR_H+STATS_BLOCK_H+6;
   tft.setTextColor(CLR_CYAN);
   tft.drawString("TEMPERATURE",x,y,1);
   y+=10;
   char s[24];
   uint16_t tc=CLR_WHITE;
-  if(bms.battT1>55.0f) tc=CLR_RED;
-  else if(bms.battT1<0.0f) tc=CLR_YELLOW;
-  snprintf(s,sizeof(s),"  T1: %.1f C",bms.battT1);
+  if(d.battT1>55.0f) tc=CLR_RED;
+  else if(d.battT1<0.0f) tc=CLR_YELLOW;
+  snprintf(s,sizeof(s),"  T1: %.1f C",d.battT1);
   tft.setTextColor(tc);
   tft.drawString(s,x,y,2);
   y+=20;
-  snprintf(s,sizeof(s),"  T2: %.1f C",bms.battT2);
-  tft.setTextColor(CLR_WHITE);
-  tft.drawString(s,x,y,2);
-  y+=20;
-  snprintf(s,sizeof(s)," MOS: %.1f C",bms.mosTemp);
+  snprintf(s,sizeof(s)," MOS: %.1f C",d.mosTemp);
   tft.drawString(s,x,y,2);
 }
 
@@ -464,53 +476,89 @@ static uint16_t btnColor(bool active, int type) {
   return active?0xFA60:0x6328;
 }
 
-static void drawControls() {
-  int bw=(SCREEN_W-PAD*3-20)/3, y=SCREEN_H-CTRL_BTN_H-2;
+static void drawControls(const BMSData& d) {
+  int bw=(SCREEN_W-PADDING*3-20)/3, y=SCREEN_H-CTRL_BTN_H-2;
+  int bx;
+
   // Charge
-  int bx=PAD;
-  tft.fillRect(bx,y,bw,CTRL_BTN_H,btnColor(bms.charge,0));
+  bx=PADDING;
+  tft.fillRect(bx,y,bw,CTRL_BTN_H,btnColor(d.charge,0));
   tft.drawRect(bx,y,bw,CTRL_BTN_H,CLR_GRAY);
   tft.setTextColor(CLR_WHITE);
   tft.drawCentreString("CHARGE",bx+bw/2,y+CTRL_BTN_H/2-6,2);
+
   // Discharge
-  bx=PAD+bw+10;
-  tft.fillRect(bx,y,bw,CTRL_BTN_H,btnColor(bms.discharge,1));
+  bx=PADDING+bw+10;
+  tft.fillRect(bx,y,bw,CTRL_BTN_H,btnColor(d.discharge,1));
   tft.drawRect(bx,y,bw,CTRL_BTN_H,CLR_GRAY);
   tft.drawCentreString("DISCHG",bx+bw/2,y+CTRL_BTN_H/2-6,2);
+
   // Balance
-  bx=PAD*2+bw*2+10;
-  tft.fillRect(bx,y,bw,CTRL_BTN_H,btnColor(bms.balance,2));
+  bx=PADDING*2+bw*2+10;
+  tft.fillRect(bx,y,bw,CTRL_BTN_H,btnColor(d.balance,2));
   tft.drawRect(bx,y,bw,CTRL_BTN_H,CLR_GRAY);
   tft.drawCentreString("BALANCE",bx+bw/2,y+CTRL_BTN_H/2-6,2);
 }
 
-static void drawStatusLine() {
-  int x=PAD, y=SCREEN_H-CTRL_BTN_H-18;
+static void drawStatusLine(const BMSData& d) {
+  int x=PADDING, y=SCREEN_H-CTRL_BTN_H-18;
   char s[64];
-  snprintf(s,sizeof(s),"Bal: %d",bms.balancingAction);
+  snprintf(s,sizeof(s),"Bal: %d",d.balancingAction);
   tft.setTextColor(CLR_AMBER);
   tft.drawString(s,x,y,1);
-  snprintf(s,sizeof(s),"Uptime: %ud %uh %um",bms.uptimeDays,bms.uptimeHrs,bms.uptimeMin);
+  snprintf(s,sizeof(s),"Uptime: %ud %uh %um",d.uptimeDays,d.uptimeHrs,d.uptimeMin);
   tft.setTextColor(CLR_GRAY);
   tft.drawString(s,SCREEN_W/2,y,1);
 }
 
-static void drawScreen() {
-  tft.fillScreen(CLR_BLACK);
-  drawHeader(); drawSOCBar(); drawCellVoltages();
-  drawBatteryStats(); drawTemps(); drawStatusLine(); drawControls();
+// Page navigation bar
+static void drawPageNav() {
+  int y = SCREEN_H - 30;
+  tft.fillRect(0, y, SCREEN_W, 30, CLR_HEADER_BG);
+
+  // Previous button
+  if (navState.currentPage > 0) {
+    tft.fillRect(4, y+2, 50, 26, CLR_DARK_BLUE);
+    tft.drawRect(4, y+2, 50, 26, CLR_BLUE);
+    tft.setTextColor(CLR_WHITE);
+    tft.drawCentreString("◀ B1", 29, y+15, 2);
+  } else {
+    tft.fillRect(4, y+2, 50, 26, CLR_DARK_GRAY);
+    tft.setTextColor(CLR_GRAY);
+    tft.drawCentreString("◀ B1", 29, y+15, 2);
+  }
+
+  // Next button
+  if (navState.currentPage < NUM_BMS - 1) {
+    tft.fillRect(SCREEN_W-54, y+2, 50, 26, CLR_DARK_GREEN);
+    tft.drawRect(SCREEN_W-54, y+2, 50, 26, CLR_GREEN);
+    tft.setTextColor(CLR_WHITE);
+    tft.drawCentreString("B2 ▶", SCREEN_W-29, y+15, 2);
+  } else {
+    tft.fillRect(SCREEN_W-54, y+2, 50, 26, CLR_DARK_GRAY);
+    tft.setTextColor(CLR_GRAY);
+    tft.drawCentreString("B2 ▶", SCREEN_W-29, y+15, 2);
+  }
 }
 
-static void drawUpdated() {
-  drawScreen(); // Full redraw for now (safe, no flicker)
+static void drawScreen(const BMSData& d) {
+  tft.fillScreen(CLR_BLACK);
+  drawHeader(d);
+  drawSOCBar(d);
+  drawCellVoltages(d);
+  drawBatteryStats(d);
+  drawTemps(d);
+  drawStatusLine(d);
+  drawControls(d);
+  drawPageNav();
 }
 
 // ===================== Touch =====================
 static void readTouch() {
   if(touchscreen.touched()) {
     TS_Point p = touchscreen.getPoint();
-    touch.x = mapTx(p.z > 0 ? p.x : 0);
-    touch.y = mapTy(p.z > 0 ? p.y : 0);
+    touch.x = map(p.x, TOUCH_MIN_X, TOUCH_MAX_X, 0, SCREEN_W);
+    touch.y = map(p.y, TOUCH_MIN_Y, TOUCH_MAX_Y, 0, SCREEN_H);
     touch.touched = p.z > 0;
   } else {
     touch.touched = false;
@@ -522,55 +570,85 @@ static void handleTouch() {
   if(millis()-touch.lastTime<TOUCH_DEBOUNCE_MS) return;
   touch.lastTime = millis();
 
-  int tx=touch.x, ty=touch.y;
-  int bw=(SCREEN_W-PAD*3-20)/3, btnY=SCREEN_H-CTRL_BTN_H-2;
+  int tx = touch.x, ty = touch.y;
 
-  // Charge
-  if(tx>=PAD && tx<=PAD+bw && ty>=btnY && ty<=btnY+CTRL_BTN_H) {
-    DBG_PRINTLN("Touch: CHARGE");
-    requestToggle(0); return;
+  // Page navigation (bottom strip)
+  int navY = SCREEN_H - 30;
+  if (ty >= navY) {
+    // Previous (left half of nav)
+    if (tx < SCREEN_W/2 && navState.currentPage > 0) {
+      DBG_PRINTLN("Page: prev");
+      navState.currentPage--;
+      return;
+    }
+    // Next (right half of nav)
+    if (tx >= SCREEN_W/2 && navState.currentPage < NUM_BMS - 1) {
+      DBG_PRINTLN("Page: next");
+      navState.currentPage++;
+      return;
+    }
   }
-  // Discharge
-  if(tx>=PAD+bw+10 && tx<=PAD+bw*2+10 && ty>=btnY && ty<=btnY+CTRL_BTN_H) {
-    DBG_PRINTLN("Touch: DISCHARGE");
-    requestToggle(1); return;
+
+  // Control buttons
+  int btnY = SCREEN_H - CTRL_BTN_H - 2;
+  int bw = (SCREEN_W-PADDING*3-20)/3;
+
+  // Charge (type 0)
+  if (tx>=PADDING && tx<=PADDING+bw && ty>=btnY && ty<=btnY+CTRL_BTN_H) {
+    if (!navState.writing) {
+      navState.controlType = 0;
+      navState.writing = true;
+      DBG_PRINTLN("Toggle: CHARGE");
+    }
+    return;
   }
-  // Balance
-  if(tx>=PAD*2+bw*2+10 && tx<=PAD*2+bw*2+10+bw && ty>=btnY && ty<=btnY+CTRL_BTN_H) {
-    DBG_PRINTLN("Touch: BALANCE");
-    requestToggle(2); return;
+
+  // Discharge (type 1)
+  if (tx>=PADDING+bw+10 && tx<=PADDING+bw*2+10 && ty>=btnY && ty<=btnY+CTRL_BTN_H) {
+    if (!navState.writing) {
+      navState.controlType = 1;
+      navState.writing = true;
+      DBG_PRINTLN("Toggle: DISCHARGE");
+    }
+    return;
+  }
+
+  // Balance (type 2)
+  if (tx>=PADDING*2+bw*2+10 && tx<=PADDING*2+bw*2+10+bw && ty>=btnY && ty<=btnY+CTRL_BTN_H) {
+    if (!navState.writing) {
+      navState.controlType = 2;
+      navState.writing = true;
+      DBG_PRINTLN("Toggle: BALANCE");
+    }
+    return;
   }
 }
 
 // ===================== BLE Control =====================
-static void requestToggle(int type) {
-  if(ctrlPending.writing) return;
-  ctrlPending.type=type;
-  ctrlPending.pending=true;
-  ctrlPending.writing=true;
-  DBG_PRINTF("Toggle: type=%d\n",type);
-}
-
 static void processControl() {
-  if(!ctrlPending.pending||!ctrlPending.writing||!bmsConnected) return;
-  ctrlPending.pending=false;
+  if (!navState.writing) return;
+  if (jkBmsDevices[navState.currentPage] == nullptr) {
+    navState.writing = false;
+    return;
+  }
+  JKBMS* bms = jkBmsDevices[navState.currentPage];
 
   uint8_t addr;
-  if(ctrlPending.type==0) addr=0x1D; // Charge
-  else if(ctrlPending.type==1) addr=0x1E; // Discharge
-  else addr=0x1F; // Balance
+  if (navState.controlType == 0) addr = 0x1D; // Charge
+  else if (navState.controlType == 1) addr = 0x1E; // Discharge
+  else addr = 0x1F; // Balance
 
-  bool cur=false;
-  if(ctrlPending.type==0) cur=bms.charge;
-  else if(ctrlPending.type==1) cur=bms.discharge;
-  else cur=bms.balance;
+  bool cur = false;
+  if (navState.controlType == 0) cur = bms->Charge;
+  else if (navState.controlType == 1) cur = bms->Discharge;
+  else cur = bms->Balance;
 
-  uint32_t val=cur?0:1;
-  DBG_PRINTF("BLE write: 0x%02X = %lu\n",addr,val);
-  jkBms.writeRegister(addr,val,0x04);
+  uint32_t val = cur ? 0 : 1;
+  DBG_PRINTF("BLE write: 0x%02X = %lu\n", addr, val);
+  bms->writeRegister(addr, val, 0x04);
   delay(350);
   DBG_PRINTLN("BLE write done");
-  ctrlPending.writing=false;
+  navState.writing = false;
 }
 
 // ===================== Web Server =====================
@@ -579,115 +657,120 @@ static void handleRoot() {
     server.sendHeader("Location","/main");
     server.send(302);
   } else {
-    server.send(200,"text/html",
-      "<html><body style='text-align:center;margin-top:60px;font-family:sans-serif;background:#1a1a2e;color:#eee;'>"
+    server.send(200,"text/html","<html><body style='text-align:center;margin-top:60px;font-family:sans-serif;background:#1a1a2e;color:#eee;'>"
       "<h2>JK-BMS Monitor</h2><p>Upload index.html via /fs</p>"
-      "<a href='/fs' style='color:#0af;font-size:1.2em;'>File Manager</a>"
-      "</body></html>");
+      "<a href='/fs' style='color:#0af;font-size:1.2em;'>File Manager</a></body></html>");
   }
 }
 
 static void handleJSON() {
   DynamicJsonDocument doc(2048);
-  doc["battery_voltage"]=bms.battVoltage;
-  doc["battery_power"]=bms.battPower;
-  doc["charge_current"]=bms.chargeCurrent;
-  doc["percent_remain"]=bms.percentRemain;
-  doc["capacity_remain"]=bms.capacityRemain;
-  doc["nominal_capacity"]=bms.nominalCapacity;
-  doc["cycle_count"]=bms.cycleCount;
-  doc["battery_t1"]=bms.battT1;
-  doc["battery_t2"]=bms.battT2;
-  doc["mos_temp"]=bms.mosTemp;
-  doc["charge"]=bms.charge;
-  doc["discharge"]=bms.discharge;
-  doc["balance"]=bms.balance;
-  doc["balancing_action"]=bms.balancingAction;
-  doc["balance_curr"]=bms.balanceCurrent;
-  doc["avg_cell_voltage"]=bms.avgCellVoltage;
-  doc["delta_cell_voltage"]=bms.deltaCellVoltage;
-  doc["cell_count"]=bms.cellCount;
-  JsonArray cells=doc.createNestedArray("cell_voltages");
-  for(int i=0;i<bms.cellCount&&i<16;i++) cells.add(bms.cellVoltage[i]);
-  JsonArray resist=doc.createNestedArray("wire_resist");
-  for(int i=0;i<bms.cellCount&&i<16;i++) resist.add(bms.wireResist[i]);
-  doc["uptime_seconds"]=bms.uptimeSec;
-  doc["uptime_days"]=bms.uptimeDays;
-  doc["uptime_hours"]=bms.uptimeHrs;
-  doc["uptime_minutes"]=bms.uptimeMin;
+  doc["num_bms"] = NUM_BMS;
+  for (int i = 0; i < NUM_BMS; i++) {
+    JsonObject dev = doc.createNestedObject(String("battery_") + (i+1));
+    dev["cell_count"] = bms[i].cellCount;
+    dev["battery_voltage"] = bms[i].battVoltage;
+    dev["battery_power"] = bms[i].battPower;
+    dev["charge_current"] = bms[i].chargeCurrent;
+    dev["percent_remain"] = bms[i].percentRemain;
+    dev["capacity_remain"] = bms[i].capacityRemain;
+    dev["nominal_capacity"] = bms[i].nominalCapacity;
+    dev["cycle_count"] = bms[i].cycleCount;
+    dev["battery_t1"] = bms[i].battT1;
+    dev["battery_t2"] = bms[i].battT2;
+    dev["mos_temp"] = bms[i].mosTemp;
+    dev["charge"] = bms[i].charge;
+    dev["discharge"] = bms[i].discharge;
+    dev["balance"] = bms[i].balance;
+    dev["balancing_action"] = bms[i].balancingAction;
+    dev["avg_cell_voltage"] = bms[i].avgCellVoltage;
+    dev["delta_cell_voltage"] = bms[i].deltaCellVoltage;
+    JsonArray cells = dev.createNestedArray("cell_voltages");
+    for (int j = 0; j < bms[i].cellCount && j < 16; j++) cells.add(bms[i].cellVoltage[j]);
+    dev["uptime_seconds"] = bms[i].uptimeSec;
+    dev["uptime_days"] = bms[i].uptimeDays;
+    dev["uptime_hours"] = bms[i].uptimeHrs;
+    dev["uptime_minutes"] = bms[i].uptimeMin;
+  }
   String json;
-  serializeJson(doc,json);
-  server.send(200,"application/json",json);
+  serializeJson(doc, json);
+  server.send(200, "application/json", json);
 }
 
 static void handleControl() {
-  if(server.method()!=HTTP_POST){server.send(405);return;}
+  if (server.method() != HTTP_POST) { server.send(405); return; }
   DynamicJsonDocument doc(200);
-  if(deserializeJson(doc,server.arg("plain"))) {server.send(400,"text/plain","Bad JSON");return;}
-  String action=doc["action"];
-  String state=doc["state"];
-  if(state!="on"&&state!="off"){server.send(400);return;}
+  if (deserializeJson(doc, server.arg("plain"))) { server.send(400, "text/plain", "Bad JSON"); return; }
+  String action = doc["action"];
+  String state = doc["state"];
+  int targetPage = doc["page"] | 0; // Default to page 0
+  if (state != "on" && state != "off") { server.send(400); return; }
+
   uint8_t addr;
-  if(action.startsWith("charging")||action=="charge") addr=0x1D;
-  else if(action.startsWith("discharging")||action=="discharge") addr=0x1E;
-  else addr=0x1F;
-  uint32_t val=(state=="on")?1:0;
-  DBG_PRINTF("Web control: 0x%02X=%lu\n",addr,val);
-  jkBms.writeRegister(addr,val,0x04);
-  delay(350);
-  server.send(200,"text/plain","OK");
+  if (action.startsWith("charging") || action == "charge") addr = 0x1D;
+  else if (action.startsWith("discharging") || action == "discharge") addr = 0x1E;
+  else addr = 0x1F;
+
+  uint32_t val = (state == "on") ? 1 : 0;
+  DBG_PRINTF("Web control page %d: 0x%02X=%lu\n", targetPage, addr, val);
+
+  if (targetPage < NUM_BMS && jkBmsDevices[targetPage] != nullptr) {
+    jkBmsDevices[targetPage]->writeRegister(addr, val, 0x04);
+    delay(350);
+  }
+  server.send(200, "text/plain", "OK");
 }
 
 static void handleSketchInfo() {
   DynamicJsonDocument doc(200);
-  doc["core_version"]=String(ESP_ARDUINO_VERSION_MAJOR)+"."+ESP_ARDUINO_VERSION_MINOR+"."+ESP_ARDUINO_VERSION_PATCH;
-  doc["compile_date"]=__DATE__;
-  doc["compile_time"]=__TIME__;
+  doc["core_version"] = String(ESP_ARDUINO_VERSION_MAJOR)+"."+ESP_ARDUINO_VERSION_MINOR+"."+ESP_ARDUINO_VERSION_PATCH;
+  doc["compile_date"] = __DATE__;
+  doc["compile_time"] = __TIME__;
   String json;
-  serializeJson(doc,json);
-  server.send(200,"application/json",json);
+  serializeJson(doc, json);
+  server.send(200, "application/json", json);
 }
 
 static void handleFreeHeap() {
   DynamicJsonDocument doc(100);
-  uint32_t f=ESP.getFreeHeap();
+  uint32_t f = ESP.getFreeHeap();
   char s[16];
-  snprintf(s,sizeof(s),"%.1fKB",(float)f/1024);
-  doc["free_heap"]=s;
-  doc["free_heap_bytes"]=f;
+  snprintf(s, sizeof(s), "%.1fKB", (float)f/1024);
+  doc["free_heap"] = s;
+  doc["free_heap_bytes"] = f;
   String json;
-  serializeJson(doc,json);
-  server.send(200,"application/json",json);
+  serializeJson(doc, json);
+  server.send(200, "application/json", json);
 }
 
 static void handleUptime() {
   DynamicJsonDocument doc(100);
-  doc["uptime_seconds"]=totalUptime;
+  doc["uptime_seconds"] = totalUptime;
   char s[32];
-  snprintf(s,sizeof(s),"%lud %02lu:%02lu:%02lu",
-    totalUptime/86400,(totalUptime%86400)/3600,(totalUptime%3600)/60,totalUptime%60);
-  doc["uptime_formatted"]=s;
+  snprintf(s, sizeof(s), "%lud %02lu:%02lu:%02lu",
+    totalUptime/86400, (totalUptime%86400)/3600, (totalUptime%3600)/60, totalUptime%60);
+  doc["uptime_formatted"] = s;
   String json;
-  serializeJson(doc,json);
-  server.send(200,"application/json",json);
+  serializeJson(doc, json);
+  server.send(200, "application/json", json);
 }
 
 static void handleFileList() {
   String files;
-  File root=LittleFS.open("/");
-  File f=root.openNextFile();
-  while(f){
+  File root = LittleFS.open("/");
+  File f = root.openNextFile();
+  while(f) {
     char sz[16];
     if(f.size()<1024) snprintf(sz,sizeof(sz),"%zuB",f.size());
     else if(f.size()<1048576) snprintf(sz,sizeof(sz),"%.1fKB",(float)f.size()/1024);
     else snprintf(sz,sizeof(sz),"%.1fMB",(float)f.size()/1048576);
-    files+="<div style='background:#16213e;padding:10px;margin:5px 0;border-radius:4px;display:flex;justify-content:space-between;'>"
+    files += "<div style='background:#16213e;padding:10px;margin:5px 0;border-radius:4px;display:flex;justify-content:space-between;'>"
     "<span>"+String(f.name())+"</span><span style='color:#888;margin:0 10px'>"+String(sz)+"</span>"
     "<a href='/view?file="+String(f.name())+"' style='color:#0af;text-decoration:none'>view</a> "
     "<a href='/delete?file="+String(f.name())+"' style='color:#f44;text-decoration:none'>del</a></div>";
-    f=root.openNextFile();
+    f = root.openNextFile();
   }
-  server.send(200,"text/html",
+  server.send(200, "text/html",
     "<html><head><style>body{font-family:sans-serif;background:#1a1a2e;color:#eee;padding:20px;}a{color:#0af;text-decoration:none;}</style></head><body>"
     "<h2>LittleFS Manager</h2>"
     "<form method='post' action='/upload' enctype='multipart/form-data'>"
@@ -697,39 +780,39 @@ static void handleFileList() {
 }
 
 static void handleFileUpload() {
-  if(server.uri()!="/upload")return;
-  HTTPUpload& upload=server.upload();
+  if (server.uri() != "/upload") return;
+  HTTPUpload& upload = server.upload();
   static File file;
-  if(upload.status==UPLOAD_FILE_START){
-    file=LittleFS.open("/"+upload.filename,"w");
-  }else if(upload.status==UPLOAD_FILE_WRITE){
-    if(file)file.write(upload.buf,upload.currentSize);
-  }else if(upload.status==UPLOAD_FILE_END){
-    if(file)file.close();
-    server.sendHeader("Location","/fs");
+  if (upload.status == UPLOAD_FILE_START) {
+    file = LittleFS.open("/"+upload.filename, "w");
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (file) file.write(upload.buf, upload.currentSize);
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (file) file.close();
+    server.sendHeader("Location", "/fs");
     server.send(303);
   }
 }
 
-static void handleFileDelete(){
-  String fn=server.arg("file");
+static void handleFileDelete() {
+  String fn = server.arg("file");
   LittleFS.remove(fn);
-  server.sendHeader("Location","/fs");
+  server.sendHeader("Location", "/fs");
   server.send(303);
 }
 
-static void handleFileView(){
-  String fn=server.arg("file");
-  if(!fn.startsWith("/"))fn="/"+fn;
-  File f=LittleFS.open(fn,"r");
-  if(!f){server.send(404);return;}
-  String c=f.readString();
+static void handleFileView() {
+  String fn = server.arg("file");
+  if (!fn.startsWith("/")) fn = "/" + fn;
+  File f = LittleFS.open(fn, "r");
+  if (!f) { server.send(404); return; }
+  String c = f.readString();
   f.close();
-  server.send(200,"text/html","<html><body style='background:#1a1a2e;color:#eee;font-family:monospace;padding:20px;'>"
+  server.send(200, "text/html", "<html><body style='background:#1a1a2e;color:#eee;font-family:monospace;padding:20px;'>"
     "<h2>"+fn+"</h2><pre>"+c+"</pre><br><a href='/fs' style='color:#0af'>Back</a></body></html>");
 }
 
-static void handleFormat(){LittleFS.format();server.sendHeader("Location","/fs");server.send(303);}
+static void handleFormat() { LittleFS.format(); server.sendHeader("Location", "/fs"); server.send(303); }
 
 // ===================== Setup =====================
 void setup() {
@@ -742,63 +825,67 @@ void setup() {
   tft.fillScreen(CLR_BLACK);
   tft.setTextColor(CLR_CYAN);
   tft.setTextSize(2);
-  tft.drawCentreString("JK-BMS",SCREEN_W/2,100,4);
+  tft.drawCentreString("JK-BMS", SCREEN_W/2, 100, 4);
   tft.setTextColor(CLR_WHITE);
   tft.setTextSize(1);
-  tft.drawCentreString("CYD Monitor",SCREEN_W/2,160,2);
-  tft.drawString("WiFi connecting...",PAD,230,2);
+  tft.drawCentreString("CYD Monitor", SCREEN_W/2, 160, 2);
+  tft.drawString("Initializing...", PAD, 230, 2);
 
   // Touch
   touchscreen.begin();
   touchscreen.setRotation(1);
 
   // LittleFS
-  if(!LittleFS.begin(true)){
+  if (!LittleFS.begin(true)) {
     DBG_PRINTLN("LittleFS mount failed");
   } else {
     DBG_PRINTLN("LittleFS mounted");
   }
 
+  // Initialize BMS objects
+  jkBmsDevices[0] = new JKBMS(std::string(BMS_MAC_1));
+  jkBmsDevices[1] = new JKBMS(std::string(BMS_MAC_2));
+
   // WiFi
   WiFi.mode(WIFI_STA);
   WiFi.begin(WiFi_SSID, WiFi_Password);
   DBG_PRINTLN("Connecting WiFi...");
-  int att=0;
-  while(WiFi.status()!=WL_CONNECTED && att<30){
-    delay(500);Serial.print(".");att++;
-    if(att%6==0){
+  int att = 0;
+  while (WiFi.status() != WL_CONNECTED && att < 30) {
+    delay(500); Serial.print("."); att++;
+    if (att % 6 == 0) {
       char s[40];
-      snprintf(s,sizeof(s),"WiFi %d/30",att);
-      tft.drawString(s,PAD,230,2);
+      snprintf(s, sizeof(s), "WiFi %d/30", att);
+      tft.drawString(s, PAD, 230, 2);
     }
   }
-  if(WiFi.status()==WL_CONNECTED){
-    wifiConnected=true;
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiConnected = true;
     DBG_PRINTLN("\nWiFi connected!");
-    DBG_PRINTF("IP: %s\n",WiFi.localIP().toString().c_str());
-    tft.drawString("WiFi OK",PAD,230,2);
+    DBG_PRINTF("IP: %s\n", WiFi.localIP().toString().c_str());
+    tft.drawString("WiFi OK", PAD, 230, 2);
     tft.setTextColor(CLR_GREEN);
-    tft.drawString(WiFi.localIP().toString().c_str(),PAD,250,2);
-  }else{
+    tft.drawString(WiFi.localIP().toString().c_str(), PAD, 250, 2);
+  } else {
     DBG_PRINTLN("\nWiFi failed!");
     tft.setTextColor(CLR_RED);
-    tft.drawString("WiFi FAILED",PAD,230,2);
+    tft.drawString("WiFi FAILED", PAD, 230, 2);
   }
 
   // Web server
-  server.serveStatic("/main",LittleFS,"/index.html");
-  server.serveStatic("/style.css",LittleFS,"/style.css","text/css");
-  server.on("/",HTTP_GET,handleRoot);
-  server.on("/data",HTTP_GET,handleJSON);
-  server.on("/control",HTTP_POST,handleControl);
-  server.on("/sketchinfo",HTTP_GET,handleSketchInfo);
-  server.on("/freeheap",HTTP_GET,handleFreeHeap);
-  server.on("/uptime",HTTP_GET,handleUptime);
-  server.on("/fs",HTTP_GET,handleFileList);
-  server.on("/upload",HTTP_POST,handleFileUpload);
-  server.on("/delete",HTTP_GET,handleFileDelete);
-  server.on("/view",HTTP_GET,handleFileView);
-  server.on("/format",HTTP_GET,handleFormat);
+  server.serveStatic("/main", LittleFS, "/index.html");
+  server.serveStatic("/style.css", LittleFS, "/style.css", "text/css");
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/data", HTTP_GET, handleJSON);
+  server.on("/control", HTTP_POST, handleControl);
+  server.on("/sketchinfo", HTTP_GET, handleSketchInfo);
+  server.on("/freeheap", HTTP_GET, handleFreeHeap);
+  server.on("/uptime", HTTP_GET, handleUptime);
+  server.on("/fs", HTTP_GET, handleFileList);
+  server.on("/upload", HTTP_POST, handleFileUpload);
+  server.on("/delete", HTTP_GET, handleFileDelete);
+  server.on("/view", HTTP_GET, handleFileView);
+  server.on("/format", HTTP_GET, handleFormat);
   server.begin();
   DBG_PRINTLN("Web server started");
 
@@ -806,42 +893,52 @@ void setup() {
   DBG_PRINTLN("Initializing NimBLE...");
   NimBLEDevice::init("JK-BMS-CYD");
   NimBLEDevice::setPower(3);
-  pScan=NimBLEDevice::getScan();
+  pScan = NimBLEDevice::getScan();
   pScan->setScanCallbacks(&scanCallbacksInstance);
   pScan->setInterval(100);
   pScan->setWindow(100);
   pScan->setActiveScan(true);
 
-  uptimeStart=millis();
-  drawScreen();
+  uptimeStart = millis();
+  drawScreen(bms[0]);
 }
 
 // ===================== Loop =====================
 void loop() {
-  unsigned long now=millis();
+  unsigned long now = millis();
 
   server.handleClient();
 
-  // BLE connection
-  if(jkBms.doConnect&&!jkBms.connected){
-    if(jkBms.connectToServer()){
-      bmsConnected=true;
-      DBG_PRINTLN("BMS connected!");
+  // BLE connection for each device
+  for (int i = 0; i < NUM_BMS; i++) {
+    if (jkBmsDevices[i] == nullptr) continue;
+    if (jkBmsDevices[i]->doConnect && !jkBmsDevices[i]->connected) {
+      if (jkBmsDevices[i]->connectToServer()) {
+        DBG_PRINTF("BMS %d connected!\n", i);
+      }
+      jkBmsDevices[i]->doConnect = false;
     }
-    jkBms.doConnect=false;
+
+    // Connection timeout
+    if (jkBmsDevices[i]->connected && (now - jkBmsDevices[i]->lastNotifyTime > 20000)) {
+      DBG_PRINTF("BMS %d timeout\n", i);
+      jkBmsDevices[i]->connected = false;
+      NimBLEClient* pc = NimBLEDevice::getClientByPeerAddress(jkBmsDevices[i]->advDevice->getAddress());
+      if (pc) pc->disconnect();
+    }
   }
 
-  // Connection timeout
-  if(jkBms.connected&&(now-jkBms.lastNotifyTime>20000)){
-    DBG_PRINTLN("BMS timeout");
-    bmsConnected=false;
-    NimBLEClient* pc=NimBLEDevice::getClientByPeerAddress(jkBms.advDevice->getAddress());
-    if(pc)pc->disconnect();
-  }
-
-  // Sync data
-  if(bms.newFrame||bmsConnected!=(jkBms.connected)){
-    syncBMSData();
+  // Sync data for all devices
+  for (int i = 0; i < NUM_BMS; i++) {
+    if (jkBmsDevices[i] != nullptr) {
+      bool anyChanged = false;
+      for (int j = 0; j < NUM_BMS; j++) {
+        if (jkBmsDevices[j] != nullptr && jkBmsDevices[j]->new_data) {
+          anyChanged = true; break;
+        }
+      }
+      syncBMSData(i);
+    }
   }
 
   // Process control
@@ -851,22 +948,29 @@ void loop() {
   readTouch();
   handleTouch();
 
-  // Draw
-  if(now-lastDrawTime>=DISPLAY_REFRESH_INTERVAL||bms.newFrame||ctrlPending.writing){
-    drawUpdated();
-    lastDrawTime=now;
-    bms.newFrame=false;
+  // Draw current page
+  BMSData& d = bms[navState.currentPage];
+  if (now - lastDrawTime >= DISPLAY_REFRESH_INTERVAL || d.newFrame || navState.writing) {
+    drawScreen(d);
+    lastDrawTime = now;
+    d.newFrame = false;
   }
 
-  // Rescan
-  if(!bmsConnected&&(now-lastScanTime>=10000)){
+  // Rescan if needed
+  bool allConnected = true;
+  for (int i = 0; i < NUM_BMS; i++) {
+    if (jkBmsDevices[i] != nullptr && !jkBmsDevices[i]->connected) {
+      allConnected = false; break;
+    }
+  }
+  if (!allConnected && (now - lastScanTime >= 10000)) {
     DBG_PRINTLN("Scanning for BMS...");
-    pScan->start(5000,false,true);
-    lastScanTime=now;
+    pScan->start(5000, false, true);
+    lastScanTime = now;
   }
 
   // Uptime
-  totalUptime=(now-uptimeStart)/1000;
+  totalUptime = (now - uptimeStart) / 1000;
 
   delay(10);
 }
