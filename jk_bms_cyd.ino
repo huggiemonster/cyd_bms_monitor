@@ -162,6 +162,12 @@ public:
   bool Charge=false, Discharge=false, Balance=false;
   int cell_count=4;
   float total_battery_capacity=0, balance_starting_voltage=0;
+  float cell_voltage_undervoltage_protection=0;
+  float cell_voltage_undervoltage_recovery=0;
+  float cell_voltage_overvoltage_protection=0;
+  float cell_voltage_overvoltage_recovery=0;
+  float max_charge_current=0;
+  float max_discharge_current=0;
 
   bool connectToServer();
   void parseData();
@@ -181,8 +187,6 @@ JKBMS jkBms(BMS_MAC);
 // ===================== BLE Callbacks =====================
 NimBLEScan* pScan;
 
-static ScanCallbacks scanCallbacksInstance;
-
 class ClientCallbacks : public NimBLEClientCallbacks {
   void onConnect(NimBLEClient* pClient) override { DBG_PRINTLN("BLE connected"); }
   void onDisconnect(NimBLEClient* pClient, int reason) override {
@@ -201,6 +205,8 @@ class ScanCallbacks : public NimBLEScanCallbacks {
     }
   }
 };
+
+static ScanCallbacks scanCallbacksInstance;
 
 void notifyCB(NimBLERemoteCharacteristic* pChr, uint8_t* pData, size_t length, bool isNotify) {
   jkBms.handleNotification(pData, length);
@@ -394,7 +400,7 @@ static void drawCellVoltages() {
   tft.setTextColor(CLR_CYAN);
   tft.drawString("CELL VOLTAGES",x,y,1);
   y+=10;
-  tft.drawLine(x,y,SCREEN_W-PAD,x,y,CLR_DARK_GRAY);
+  tft.drawLine(x,y,SCREEN_W-PAD,y,CLR_DARK_GRAY);
   y+=4;
   for(int i=0;i<bms.cellCount&&i<CELL_ROWS;i++) {
     char line[40];
@@ -502,10 +508,10 @@ static void drawUpdated() {
 // ===================== Touch =====================
 static void readTouch() {
   if(touchscreen.touched()) {
-    TS_Point p = touchscreen.read();
-    touch.x = mapTx(p.x);
-    touch.y = mapTy(p.y);
-    touch.touched = true;
+    TS_Point p = touchscreen.getPoint();
+    touch.x = mapTx(p.z > 0 ? p.x : 0);
+    touch.y = mapTy(p.z > 0 ? p.y : 0);
+    touch.touched = p.z > 0;
   } else {
     touch.touched = false;
   }
@@ -674,7 +680,7 @@ static void handleFileList() {
     char sz[16];
     if(f.size()<1024) snprintf(sz,sizeof(sz),"%zuB",f.size());
     else if(f.size()<1048576) snprintf(sz,sizeof(sz),"%.1fKB",(float)f.size()/1024);
-    else snprintf(sz,sizeof(s,"%.1fMB"),(float)f.size()/1048576);
+    else snprintf(sz,sizeof(sz),"%.1fMB",(float)f.size()/1048576);
     files+="<div style='background:#16213e;padding:10px;margin:5px 0;border-radius:4px;display:flex;justify-content:space-between;'>"
     "<span>"+String(f.name())+"</span><span style='color:#888;margin:0 10px'>"+String(sz)+"</span>"
     "<a href='/view?file="+String(f.name())+"' style='color:#0af;text-decoration:none'>view</a> "
