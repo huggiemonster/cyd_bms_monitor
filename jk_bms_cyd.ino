@@ -793,7 +793,7 @@ void setup() {
 
   // TFT
   tft.init();
-  tft.setRotation(1);
+  tft.setRotation(0);
   tft.fillScreen(CLR_BLACK);
   tft.setTextColor(CLR_CYAN);
   tft.setTextSize(2);
@@ -805,7 +805,7 @@ void setup() {
 
   // Touch
   touchscreen.begin();
-  touchscreen.setRotation(1);
+  touchscreen.setRotation(0);
 
   // LittleFS
   if (!LittleFS.begin(true)) {
