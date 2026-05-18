@@ -121,7 +121,6 @@ XPT2046_Touchscreen touchscreen(PIN_TOUCH_CS);
 WebServer server(80);
 
 BMSData bms[NUM_BMS];  // Multi-BMS data
-int currentPage = 0;   // Current page (0 or 1)
 
 bool wifiConnected = false;
 unsigned long lastDrawTime = 0;
@@ -362,22 +361,32 @@ static void syncBMSData(int idx) {
 static void drawHeader(const BMSData& d) {
   tft.fillRect(0,0,SCREEN_W,HEADER_H,CLR_HEADER_BG);
 
-  // Battery label
-  tft.setTextColor(CLR_WHITE, CLR_HEADER_BG);
-  tft.drawString(String("BATTERY ") + (navState.currentPage + 1), PADDING, HEADER_H/2-6, 2);
+  // Battery label + page navigation in header corners
+  char pageLabel[8];
+  snprintf(pageLabel, sizeof(pageLabel), "BATTERY %d", navState.currentPage + 1);
 
-  // Page dots
-  int dotY = HEADER_H/2 + 4;
-  for (int i = 0; i < NUM_BMS; i++) {
-    int dotX = SCREEN_W/2 - (NUM_BMS-1)*8 + i*16;
-    if (i == navState.currentPage) {
-      tft.fillCircle(dotX, dotY, 4, CLR_GREEN);
-    } else {
-      tft.fillCircle(dotX, dotY, 3, CLR_DARK_GRAY);
-    }
+  // Left arrow (previous page)
+  if (navState.currentPage > 0) {
+    tft.fillRect(2, 2, 36, HEADER_H - 4, CLR_DARK_BLUE);
+    tft.drawRect(2, 2, 36, HEADER_H - 4, CLR_BLUE);
+    tft.setTextColor(CLR_WHITE, CLR_DARK_BLUE);
+    tft.drawCentreString("◀", 20, HEADER_H/2-6, 2);
   }
 
-  // Connection status
+  // Battery label centered
+  tft.setTextColor(CLR_WHITE, CLR_HEADER_BG);
+  tft.drawString(pageLabel, SCREEN_W/2 - 40, HEADER_H/2-6, 2);
+
+  // Right arrow (next page)
+  if (navState.currentPage < NUM_BMS - 1) {
+    int ax = SCREEN_W - 38;
+    tft.fillRect(ax, 2, 36, HEADER_H - 4, CLR_DARK_GREEN);
+    tft.drawRect(ax, 2, 36, HEADER_H - 4, CLR_GREEN);
+    tft.setTextColor(CLR_WHITE, CLR_DARK_GREEN);
+    tft.drawCentreString("▶", ax + 18, HEADER_H/2-6, 2);
+  }
+
+  // Connection status - right side
   bool anyConnected = false;
   for (int i = 0; i < NUM_BMS; i++) {
     if (jkBmsDevices[i] != nullptr && jkBmsDevices[i]->connected) {
@@ -386,15 +395,16 @@ static void drawHeader(const BMSData& d) {
   }
 
   tft.setTextSize(1);
+  int statusX = anyConnected ? SCREEN_W - PADDING - 60 : SCREEN_W - PADDING - 70;
   if (wifiConnected && anyConnected) {
     tft.setTextColor(CLR_GREEN, CLR_HEADER_BG);
-    tft.drawRightString("CONNECTED", SCREEN_W-PADDING-20, HEADER_H/2-6, 2);
+    tft.drawRightString("CONNECTED", SCREEN_W - PADDING - 40, HEADER_H/2-6, 2);
   } else if (wifiConnected) {
     tft.setTextColor(CLR_AMBER, CLR_HEADER_BG);
-    tft.drawRightString("SCANNING...", SCREEN_W-PADDING-20, HEADER_H/2-6, 2);
+    tft.drawRightString("SCANNING...", SCREEN_W - PADDING - 50, HEADER_H/2-6, 2);
   } else {
     tft.setTextColor(CLR_RED, CLR_HEADER_BG);
-    tft.drawRightString("NO WIFI", SCREEN_W-PADDING-20, HEADER_H/2-6, 2);
+    tft.drawRightString("NO WIFI", SCREEN_W - PADDING - 50, HEADER_H/2-6, 2);
   }
 }
 
@@ -512,36 +522,6 @@ static void drawStatusLine(const BMSData& d) {
   tft.drawString(s,SCREEN_W/2,y,1);
 }
 
-// Page navigation bar
-static void drawPageNav() {
-  int y = SCREEN_H - 30;
-  tft.fillRect(0, y, SCREEN_W, 30, CLR_HEADER_BG);
-
-  // Previous button
-  if (navState.currentPage > 0) {
-    tft.fillRect(4, y+2, 50, 26, CLR_DARK_BLUE);
-    tft.drawRect(4, y+2, 50, 26, CLR_BLUE);
-    tft.setTextColor(CLR_WHITE);
-    tft.drawCentreString("◀ B1", 29, y+15, 2);
-  } else {
-    tft.fillRect(4, y+2, 50, 26, CLR_DARK_GRAY);
-    tft.setTextColor(CLR_GRAY);
-    tft.drawCentreString("◀ B1", 29, y+15, 2);
-  }
-
-  // Next button
-  if (navState.currentPage < NUM_BMS - 1) {
-    tft.fillRect(SCREEN_W-54, y+2, 50, 26, CLR_DARK_GREEN);
-    tft.drawRect(SCREEN_W-54, y+2, 50, 26, CLR_GREEN);
-    tft.setTextColor(CLR_WHITE);
-    tft.drawCentreString("B2 ▶", SCREEN_W-29, y+15, 2);
-  } else {
-    tft.fillRect(SCREEN_W-54, y+2, 50, 26, CLR_DARK_GRAY);
-    tft.setTextColor(CLR_GRAY);
-    tft.drawCentreString("B2 ▶", SCREEN_W-29, y+15, 2);
-  }
-}
-
 static void drawScreen(const BMSData& d) {
   tft.fillScreen(CLR_BLACK);
   drawHeader(d);
@@ -551,7 +531,6 @@ static void drawScreen(const BMSData& d) {
   drawTemps(d);
   drawStatusLine(d);
   drawControls(d);
-  drawPageNav();
 }
 
 // ===================== Touch =====================
@@ -573,17 +552,17 @@ static void handleTouch() {
 
   int tx = touch.x, ty = touch.y;
 
-  // Page navigation (bottom strip)
-  int navY = SCREEN_H - 30;
-  if (ty >= navY) {
-    // Previous (left half of nav)
-    if (tx < SCREEN_W/2 && navState.currentPage > 0) {
+  // Page navigation (header arrows)
+  if (ty < HEADER_H) {
+    // Left arrow: x from 2 to 38
+    if (tx >= 2 && tx <= 38 && navState.currentPage > 0) {
       DBG_PRINTLN("Page: prev");
       navState.currentPage--;
       return;
     }
-    // Next (right half of nav)
-    if (tx >= SCREEN_W/2 && navState.currentPage < NUM_BMS - 1) {
+    // Right arrow: x from (SCREEN_W-38) to SCREEN_W-2
+    int rightArrowX = SCREEN_W - 38;
+    if (tx >= rightArrowX && tx <= SCREEN_W - 2 && navState.currentPage < NUM_BMS - 1) {
       DBG_PRINTLN("Page: next");
       navState.currentPage++;
       return;
