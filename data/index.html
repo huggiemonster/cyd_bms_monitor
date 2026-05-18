@@ -231,10 +231,14 @@ async function updateData() {
 
 async function toggleControl(action) {
   try {
+    // Read current state from DOM first
+    const statusEl = document.getElementById('btn-' + action + '-status');
+    const current = statusEl ? statusEl.textContent.trim() : 'OFF';
+    const newState = current === 'ON' ? 'off' : 'on';
     const resp = await fetch(API_BASE + '/control', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({action: action, state: 'toggle'})
+      body: JSON.stringify({action: action, state: newState})
     });
     if (resp.ok) {
       setTimeout(updateData, 500);
