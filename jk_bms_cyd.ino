@@ -118,9 +118,12 @@ struct BMSData {
   bool  newFrame        = false;
 };
 
+// ===================== Touch SPI Bus =====================
+SPIClass touchscreenSPI(VSPI);
+
 // ===================== Global Objects =====================
 TFT_eSPI tft = TFT_eSPI();
-XPT2046_Touchscreen touchscreen(PIN_TOUCH_CS);
+XPT2046_Touchscreen touchscreen(PIN_TOUCH_CS, PIN_TOUCH_IRQ);
 WebServer server(80);
 
 BMSData bms[NUM_BMS];  // Multi-BMS data
@@ -801,8 +804,9 @@ void setup() {
   tft.drawCentreString("CYD Monitor", SCREEN_W/2, 160, 2);
   tft.drawString("Initializing...", PADDING, 230, 2);
 
-  // Touch
-  touchscreen.begin(PIN_TOUCH_CLK, PIN_TOUCH_MISO, PIN_TOUCH_MOSI, PIN_TOUCH_CS);
+  // Touch SPI bus + init
+  touchscreenSPI.begin(PIN_TOUCH_CLK, PIN_TOUCH_MISO, PIN_TOUCH_MOSI, PIN_TOUCH_CS);
+  touchscreen.begin(touchscreenSPI);
   touchscreen.setRotation(1);
 
   // LittleFS
