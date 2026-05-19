@@ -262,7 +262,7 @@ bool JKBMS::connectToServer() {
     if (pChr && pChr->canNotify()) {
       if (pChr->subscribe(true, notifyCB)) {
         DBG_PRINTF("Subscribed to %s\n", pChr->getUUID().toString().c_str());
-        delay(500);
+        delay(200);
         writeRegister(0x97, 0, 0); // Device info
         DBG_PRINTLN("Wrote device info register (0x97)");
         connected = true;
@@ -313,7 +313,25 @@ void JKBMS::writeRegister(uint8_t address, uint32_t value, uint8_t length) {
 }
 
 void JKBMS::bms_settings() {
-  cell_count = (receivedBytes[117]<<24|receivedBytes[116]<<16|receivedBytes[115]<<8|receivedBytes[114]);
+  // Cell count is read from the 0x01 settings frame, bytes 114-117
+  // Some firmware versions have different layouts — add sanity check
+  uint32_t raw_count = (receivedBytes[117]<<24|receivedBytes[116]<<16|receivedBytes[115]<<8|receivedBytes[114]);
+  // Sanity: cell count should be between 1 and 16 for any practical battery
+  // If it's 0 or suspiciously large (>16), try byte 5 as fallback
+  if (raw_count < 1 || raw_count > 16) {
+    // Byte 5 in cell data frames is sometimes a cell count, sometimes a frame counter
+    // Use it only as fallback and double-check
+    uint8_t fb = receivedBytes[5];
+    if (fb >= 1 && fb <= 16) {
+      cell_count = fb;
+    } else {
+      // No reliable cell count found — use last known value or default
+      // For 3S/12V batteries, default to 3
+      cell_count = cell_count > 0 ? cell_count : 3;
+    }
+  } else {
+    cell_count = (int)raw_count;
+  }
   total_battery_capacity = ((receivedBytes[133]<<24|receivedBytes[132]<<16|receivedBytes[131]<<8|receivedBytes[130])*0.001);
   DBG_PRINTF("Settings: %d cells, %.2fAh\n", cell_count, total_battery_capacity);
 }
@@ -555,7 +573,6 @@ static void readTouch() {
     touch.x = map(p.x, TOUCH_MIN_X, TOUCH_MAX_X, 0, SCREEN_W);
     touch.y = map(p.y, TOUCH_MIN_Y, TOUCH_MAX_Y, 0, SCREEN_H);
     touch.touched = p.z > 0;
-    DBG_PRINTF("Touch: x=%d y=%d z=%d\n", touch.x, touch.y, p.z);
   } else {
     touch.touched = false;
   }
@@ -948,11 +965,13 @@ void loop() {
   readTouch();
   handleTouch();
 
-  // Draw current page — only redraw when new data arrives or page/control changes
+  // Draw current page — throttle redraws to every 1s so touch stays responsive
   BMSData& d = bms[navState.currentPage];
-  if (d.newFrame || navState.writing) {
+  static unsigned long lastDrawTime = 0;
+  if ((d.newFrame || navState.writing) && (now - lastDrawTime > 1000)) {
     drawScreen(d);
     d.newFrame = false;
+    lastDrawTime = now;
   }
 
   // Rescan if needed
