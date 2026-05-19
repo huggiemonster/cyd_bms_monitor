@@ -239,10 +239,20 @@ bool JKBMS::connectToServer() {
     pClient->setConnectionParams(12, 12, 0, 150);
     pClient->setConnectTimeout(5000);
   }
+
   if (!pClient->connect(advDevice)) {
     DBG_PRINTF("Connection failed: %s\n", targetMAC.c_str());
     return false;
   }
+  DBG_PRINTLN("BLE connected");
+
+  // Negotiate MTU before subscribing — cell data frames are ~200 bytes, default MTU (23) is too small
+  // The BMS won't send large cell data notifications unless MTU is high enough
+  uint16_t mtu = pClient->getMTU();
+  DBG_PRINTF("Current MTU: %d\n", mtu);
+  mtu = pClient->exchangeMtu(247);
+  DBG_PRINTF("Negotiated MTU: %d\n", mtu);
+
   DBG_PRINTF("Connected! RSSI: %d\n", pClient->getRssi());
   NimBLERemoteService* pSvc = pClient->getService("ffe0");
   if (pSvc) {
