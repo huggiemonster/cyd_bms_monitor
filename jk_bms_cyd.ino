@@ -30,6 +30,7 @@ static const int  NUM_BMS        = 2;
 
 #define DISPLAY_REFRESH_INTERVAL 500
 #define TOUCH_DEBOUNCE_MS 200
+#define BLE_NOTIFY_TIMEOUT 45000 // 45s before giving up on cell data
 
 // ===================== Debug =====================
 #if DEBUG_ENABLED
@@ -870,9 +871,9 @@ void setup() {
   NimBLEDevice::setPower(3);
   pScan = NimBLEDevice::getScan();
   pScan->setScanCallbacks(&scanCallbacksInstance);
-  pScan->setInterval(100);
-  pScan->setWindow(100);
-  pScan->setActiveScan(true);
+  pScan->setInterval(1024);   // Less aggressive — don't hog BLE airtime from active connections
+  pScan->setWindow(50);
+  pScan->setActiveScan(false); // Passive scan — don't interfere with active connections
 
   uptimeStart = millis();
   drawScreen(bms[0]);
@@ -888,15 +889,17 @@ void loop() {
   for (int i = 0; i < NUM_BMS; i++) {
     if (jkBmsDevices[i] == nullptr) continue;
     if (jkBmsDevices[i]->doConnect && !jkBmsDevices[i]->connected) {
+      // Stop scanning while connecting — don't steal BLE airtime
+      pScan->stop();
       if (jkBmsDevices[i]->connectToServer()) {
         DBG_PRINTF("BMS %d connected!\n", i);
       }
       jkBmsDevices[i]->doConnect = false;
     }
 
-    // Connection timeout
-    if (jkBmsDevices[i]->connected && (now - jkBmsDevices[i]->lastNotifyTime > 20000)) {
-      DBG_PRINTF("BMS %d timeout\n", i);
+    // Connection timeout — no notification data in 45s, disconnect and resume scanning
+    if (jkBmsDevices[i]->connected && (now - jkBmsDevices[i]->lastNotifyTime > BLE_NOTIFY_TIMEOUT)) {
+      DBG_PRINTF("BMS %d timeout (no cell data in %lums)\n", i, now - jkBmsDevices[i]->lastNotifyTime);
       jkBmsDevices[i]->connected = false;
       NimBLEClient* pc = NimBLEDevice::getClientByPeerAddress(jkBmsDevices[i]->advDevice->getAddress());
       if (pc) pc->disconnect();
