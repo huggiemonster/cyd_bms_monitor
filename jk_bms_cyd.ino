@@ -299,22 +299,36 @@ void JKBMS::handleNotification(uint8_t* pData, size_t length) {
 
   if (ignoreNotifyCount > 0) { ignoreNotifyCount--; return; }
 
+  // Check for frame header
   if (pData[0]==0x55 && pData[1]==0xAA && pData[2]==0xEB && pData[3]==0x90) {
-    frame=0; received_start=true; received_complete=false;
+    // Check if this is a fresh frame (not a continuation of a partial one)
+    if (received_start && !received_complete && frame > 0) {
+      // We had a partial frame from a previous notification — reset and start new
+      DBG_PRINTLN("Frame overlap — resetting partial frame");
+    }
+    frame = 0;
+    received_start = true;
+    received_complete = false;
     for(size_t i=0;i<length;i++) receivedBytes[frame++]=pData[i];
   } else if (received_start && !received_complete) {
+    // Continuation of a fragmented frame — accumulate bytes
     for(size_t i=0;i<length;i++) {
       receivedBytes[frame++]=pData[i];
-      if(frame>=300) {
-        received_complete=true; received_start=false; new_data=true;
-        switch(receivedBytes[4]) {
-          case 0x01: bms_settings(); break;
-          case 0x02: parseData(); break;
-          case 0x03: parseDeviceInfo(); break;
-        }
-        break;
+    }
+    // Frame complete once we have enough data (cell data frames are ~56 bytes, device info ~134)
+    if (frame >= 56) {
+      received_complete = true;
+      received_start = false; // Reset so next notification needs a header
+      new_data = true;
+      switch(receivedBytes[4]) {
+        case 0x01: bms_settings(); break;
+        case 0x02: parseData(); break;
+        case 0x03: parseDeviceInfo(); break;
       }
     }
+  } else {
+    // No header and not in a partial frame — discard
+    DBG_PRINTLN("Discarded notification: no header and not in partial frame");
   }
 }
 
