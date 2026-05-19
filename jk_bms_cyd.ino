@@ -265,10 +265,19 @@ bool JKBMS::connectToServer() {
         delay(500);
         writeRegister(0x97, 0, 0); // Device info
         DBG_PRINTLN("Wrote device info register (0x97)");
-        // Do NOT write 0x96 — some JK-BMS firmware ignores it and disconnects.
-        // Try auto-notification first (BMS should push cell data on its own)
-        DBG_PRINTLN("Skipping cell data register write — waiting for auto-notifications");
-        delay(2000); // Wait longer for first auto-notification
+        delay(500);
+        // Try cell data with explicit length=4 (4 bytes payload)
+        // The protocol for cell data may need the length byte set
+        uint8_t addr = 0x96;
+        uint8_t len = 0x04;
+        uint32_t val = 0;
+        uint8_t cellFrame[20]={0xAA,0x55,0x90,0xEB,addr,len};
+        cellFrame[6]=val>>0; cellFrame[7]=val>>8; cellFrame[8]=val>>16; cellFrame[9]=val>>24;
+        cellFrame[19]=crc(cellFrame,19);
+        DBG_PRINTLN("Writing cell data register (0x96) with len=4");
+        if(pChr) pChr->writeValue((uint8_t*)cellFrame,sizeof(cellFrame));
+        DBG_PRINTLN("Wrote cell data register — waiting 5s for auto-notifications");
+        delay(5000); // Wait 5s for cell data to arrive
         connected = true;
         return true;
       }
@@ -280,6 +289,14 @@ bool JKBMS::connectToServer() {
 
 void JKBMS::handleNotification(uint8_t* pData, size_t length) {
   lastNotifyTime = millis();
+  // Always log first 8 bytes of notification for debugging
+  char hexBuf[64];
+  hexBuf[0] = 0;
+  for (size_t i = 0; i < length && i < 32; i++) {
+    snprintf(hexBuf + strlen(hexBuf), sizeof(hexBuf) - strlen(hexBuf), "%02X ", pData[i]);
+  }
+  DBG_PRINTLN(hexBuf);
+
   if (ignoreNotifyCount > 0) { ignoreNotifyCount--; return; }
 
   if (pData[0]==0x55 && pData[1]==0xAA && pData[2]==0xEB && pData[3]==0x90) {
