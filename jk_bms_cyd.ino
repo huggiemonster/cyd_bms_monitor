@@ -250,7 +250,7 @@ bool JKBMS::connectToServer() {
   // The BMS won't send large cell data notifications unless MTU is high enough
   uint16_t mtu = pClient->getMTU();
   DBG_PRINTF("Current MTU: %d\n", mtu);
-  mtu = pClient->exchangeMtu(247);
+  mtu = pClient->exchangeMTU(247);
   DBG_PRINTF("Negotiated MTU: %d\n", mtu);
 
   DBG_PRINTF("Connected! RSSI: %d\n", pClient->getRssi());
