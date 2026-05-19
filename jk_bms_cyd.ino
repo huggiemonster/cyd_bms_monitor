@@ -265,19 +265,6 @@ bool JKBMS::connectToServer() {
         delay(500);
         writeRegister(0x97, 0, 0); // Device info
         DBG_PRINTLN("Wrote device info register (0x97)");
-        delay(500);
-        // Try cell data with explicit length=4 (4 bytes payload)
-        // The protocol for cell data may need the length byte set
-        uint8_t addr = 0x96;
-        uint8_t len = 0x04;
-        uint32_t val = 0;
-        uint8_t cellFrame[20]={0xAA,0x55,0x90,0xEB,addr,len};
-        cellFrame[6]=val>>0; cellFrame[7]=val>>8; cellFrame[8]=val>>16; cellFrame[9]=val>>24;
-        cellFrame[19]=crc(cellFrame,19);
-        DBG_PRINTLN("Writing cell data register (0x96) with len=4");
-        if(pChr) pChr->writeValue((uint8_t*)cellFrame,sizeof(cellFrame));
-        DBG_PRINTLN("Wrote cell data register — waiting 5s for auto-notifications");
-        delay(5000); // Wait 5s for cell data to arrive
         connected = true;
         return true;
       }
@@ -289,22 +276,26 @@ bool JKBMS::connectToServer() {
 
 void JKBMS::handleNotification(uint8_t* pData, size_t length) {
   lastNotifyTime = millis();
-  // Always log first 8 bytes of notification for debugging
-  char hexBuf[64];
-  hexBuf[0] = 0;
-  for (size_t i = 0; i < length && i < 32; i++) {
-    snprintf(hexBuf + strlen(hexBuf), sizeof(hexBuf) - strlen(hexBuf), "%02X ", pData[i]);
-  }
-  DBG_PRINTLN(hexBuf);
-
   if (ignoreNotifyCount > 0) { ignoreNotifyCount--; return; }
 
   // Check for frame header
   if (pData[0]==0x55 && pData[1]==0xAA && pData[2]==0xEB && pData[3]==0x90) {
-    // Check if this is a fresh frame (not a continuation of a partial one)
+    // If we have an incomplete frame from before, process it with what we have
     if (received_start && !received_complete && frame > 0) {
-      DBG_PRINTLN("Frame overlap — resetting partial frame");
+      // The old frame may have been truncated, process anyway
+      received_complete = true;
+      received_start = false;
+      new_data = true;
+      switch(receivedBytes[4]) {
+        case 0x01: bms_settings(); break;
+        case 0x02: parseData(); break;
+        case 0x03: parseDeviceInfo(); break;
+      }
+      // Clear buffer beyond frame
+      for (int i = frame; i < 300; i++) receivedBytes[i] = 0;
+      DBG_PRINTLN("Old frame truncated — processed with partial data");
     }
+    // Start fresh frame
     frame = 0;
     received_start = true;
     received_complete = false;
@@ -314,51 +305,8 @@ void JKBMS::handleNotification(uint8_t* pData, size_t length) {
     for(size_t i=0;i<length;i++) {
       receivedBytes[frame++]=pData[i];
     }
-  } else {
-    // No header and not in a partial frame — discard
-    DBG_PRINTLN("Discarded notification: no header and not in partial frame");
-    return;
   }
-
-  // Check for frame end: cell data = 56 bytes, device info = 134 bytes, settings = 134 bytes
-  // Check more carefully: look for the data pattern
-  if (frame >= 56 && received_start && !received_complete) {
-    // Potential frame end — check if we have a reasonable frame
-    uint8_t frameType = receivedBytes[4];
-    uint8_t cellCount = receivedBytes[5];
-
-    // For cell data (0x02), frame = 7 + (cellCount*2) + padding
-    // cellCount byte 0x08 = 8 cells → 7 + 16 = 23+ bytes frame
-    // cellCount byte 0x38 = 56 → this is suspicious, might not be cell count
-    // Try both: if cellCount looks like 1-16, use cell-based sizing
-    uint16_t frameLen;
-    if (frameType == 0x02 && cellCount >= 1 && cellCount <= 16) {
-      frameLen = 7 + (cellCount * 2) + 20; // cells + status bytes
-    } else {
-      frameLen = 56; // Default guess
-    }
-
-    // Also check: device info frames are 134 bytes
-    if (frameType == 0x03) frameLen = 134;
-    if (frameType == 0x01) frameLen = 134;
-
-    if (frame >= frameLen) {
-      received_complete = true;
-      received_start = false;
-      new_data = true;
-
-      // Clear buffer beyond frame to prevent contamination
-      for (int i = frameLen; i < 300; i++) {
-        receivedBytes[i] = 0;
-      }
-
-      switch(frameType) {
-        case 0x01: bms_settings(); break;
-        case 0x02: parseData(); break;
-        case 0x03: parseDeviceInfo(); break;
-      }
-    }
-  }
+  // else: no header, not in partial frame — discard
 }
 
 void JKBMS::writeRegister(uint8_t address, uint32_t value, uint8_t length) {
@@ -384,17 +332,6 @@ void JKBMS::parseDeviceInfo() {
 void JKBMS::parseData() {
   DBG_PRINTLN("--- BMS cell data received ---");
   new_data=false; ignoreNotifyCount=10;
-
-  // Debug: print frame structure
-  DBG_PRINT("Frame: ");
-  for (int i = 0; i < frame && i < 20; i++) {
-    DBG.print(receivedBytes[i], HEX);
-    DBG.print(" ");
-  }
-  DBG.print(" (total=");
-  DBG.print(frame);
-  DBG.println(")");
-
   for(int j=0,i=7;i<38&&j<16;j++,i+=2)
     cellVoltage[j]=(uint16_t)(receivedBytes[i]|(receivedBytes[i-1]<<8))*0.001;
   Average_Cell_Voltage  =((uint16_t)(receivedBytes[75]|(receivedBytes[74]<<8)))*0.001;
