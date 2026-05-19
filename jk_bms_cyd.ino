@@ -237,7 +237,7 @@ bool JKBMS::connectToServer() {
     DBG_PRINTLN("New BLE client");
     pClient->setClientCallbacks(new ClientCallbacks(this), true);
     pClient->setConnectionParams(12, 12, 0, 150);
-    pClient->setConnectTimeout(5000);
+    pClient->setConnectTimeout(30000);
   }
 
   if (!pClient->connect(advDevice)) {
@@ -265,9 +265,10 @@ bool JKBMS::connectToServer() {
         delay(500);
         writeRegister(0x97, 0, 0); // Device info
         DBG_PRINTLN("Wrote device info register (0x97)");
-        delay(500);
-        writeRegister(0x96, 0, 0); // Cell data
-        DBG_PRINTLN("Wrote cell data register (0x96) — waiting for notifications");
+        // Do NOT write 0x96 — some JK-BMS firmware ignores it and disconnects.
+        // Try auto-notification first (BMS should push cell data on its own)
+        DBG_PRINTLN("Skipping cell data register write — waiting for auto-notifications");
+        delay(2000); // Wait longer for first auto-notification
         connected = true;
         return true;
       }
