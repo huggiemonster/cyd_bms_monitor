@@ -325,9 +325,8 @@ void JKBMS::bms_settings() {
     if (fb >= 1 && fb <= 16) {
       cell_count = fb;
     } else {
-      // No reliable cell count found — use last known value or default
-      // For 3S/12V batteries, default to 3
-      cell_count = cell_count > 0 ? cell_count : 3;
+      // No reliable cell count found — default to 3 for 3S/12V
+      cell_count = 3;
     }
   } else {
     cell_count = (int)raw_count;
