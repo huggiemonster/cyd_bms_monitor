@@ -525,11 +525,10 @@ static void drawScreen(const BMSData& d) {
 
 // ===================== Touch =====================
 static void readTouch() {
-  if(touchscreen.touched()) {
+  if(touchscreen.tirqTouched() && touchscreen.touched()) {
     TS_Point p = touchscreen.getPoint();
-    // Landscape rotation: swap touch axes
-    touch.x = map(p.y, TOUCH_MIN_Y, TOUCH_MAX_Y, 0, SCREEN_W);
-    touch.y = map(p.x, TOUCH_MIN_X, TOUCH_MAX_X, 0, SCREEN_H);
+    touch.x = map(p.x, TOUCH_MIN_X, TOUCH_MAX_X, 0, SCREEN_W);
+    touch.y = map(p.y, TOUCH_MIN_Y, TOUCH_MAX_Y, 0, SCREEN_H);
     touch.touched = p.z > 0;
     DBG_PRINTF("Touch: x=%d y=%d z=%d\n", touch.x, touch.y, p.z);
   } else {
