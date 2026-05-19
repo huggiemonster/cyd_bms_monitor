@@ -54,11 +54,14 @@ static const int  NUM_BMS        = 2;
 #define PIN_TFT_BL   21
 #define PIN_TOUCH_CS 33
 #define PIN_TOUCH_IRQ 36
+#define PIN_TOUCH_CLK 25
+#define PIN_TOUCH_MOSI 32
+#define PIN_TOUCH_MISO 39
 
-#define TOUCH_MIN_X 240
-#define TOUCH_MAX_X 3800
-#define TOUCH_MIN_Y 200
-#define TOUCH_MAX_Y 3700
+#define TOUCH_MIN_X 200
+#define TOUCH_MAX_X 3700
+#define TOUCH_MIN_Y 240
+#define TOUCH_MAX_Y 3800
 
 #define HEADER_H    32
 #define SOC_BAR_H   28
@@ -799,7 +802,7 @@ void setup() {
   tft.drawString("Initializing...", PADDING, 230, 2);
 
   // Touch
-  touchscreen.begin();
+  touchscreen.begin(PIN_TOUCH_CLK, PIN_TOUCH_MISO, PIN_TOUCH_MOSI, PIN_TOUCH_CS);
   touchscreen.setRotation(1);
 
   // LittleFS

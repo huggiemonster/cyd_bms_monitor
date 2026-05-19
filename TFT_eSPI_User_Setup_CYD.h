@@ -37,6 +37,13 @@
 #define TOUCH_MIN_Y 240
 #define TOUCH_MAX_Y 3800
 
+// === XPT2046 Touchscreen Pins ===
+#define XPT2046_CLK 25
+#define XPT2046_MISO 39
+#define XPT2046_MOSI 32
+#define XPT2046_CS 33
+#define XPT2046_IRQ 36
+
 // === Other ===
 #define TFT_INVERSION_OFF
 #define SPI_FREQUENCY  40000000
