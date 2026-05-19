@@ -278,11 +278,9 @@ void JKBMS::handleNotification(uint8_t* pData, size_t length) {
   lastNotifyTime = millis();
   if (ignoreNotifyCount > 0) { ignoreNotifyCount--; return; }
 
-  // Check for frame header
   if (pData[0]==0x55 && pData[1]==0xAA && pData[2]==0xEB && pData[3]==0x90) {
-    // If we have an incomplete frame from before, process it with what we have
+    // New frame header — process previous frame if we have one, then clear buffer
     if (received_start && !received_complete && frame > 0) {
-      // The old frame may have been truncated, process anyway
       received_complete = true;
       received_start = false;
       new_data = true;
@@ -291,22 +289,20 @@ void JKBMS::handleNotification(uint8_t* pData, size_t length) {
         case 0x02: parseData(); break;
         case 0x03: parseDeviceInfo(); break;
       }
-      // Clear buffer beyond frame
-      for (int i = frame; i < 300; i++) receivedBytes[i] = 0;
-      DBG_PRINTLN("Old frame truncated — processed with partial data");
     }
-    // Start fresh frame
+    // Clear entire buffer to remove stale bytes from old frame
+    for (int i = 0; i < 300; i++) receivedBytes[i] = 0;
     frame = 0;
     received_start = true;
     received_complete = false;
     for(size_t i=0;i<length;i++) receivedBytes[frame++]=pData[i];
   } else if (received_start && !received_complete) {
-    // Continuation of a fragmented frame — accumulate bytes
+    // Continuation of fragmented frame — accumulate bytes
     for(size_t i=0;i<length;i++) {
       receivedBytes[frame++]=pData[i];
     }
   }
-  // else: no header, not in partial frame — discard
+  // else: discard
 }
 
 void JKBMS::writeRegister(uint8_t address, uint32_t value, uint8_t length) {
