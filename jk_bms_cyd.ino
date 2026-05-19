@@ -24,8 +24,8 @@
 
 static const char WiFi_SSID[]    = "YOUR_WIFI_SSID";
 static const char WiFi_Password[] = "YOUR_WIFI_PASSWORD";
-static const char BMS_MAC_1[]    = "00:00:00:00:00:00"; // Battery 1 MAC
-static const char BMS_MAC_2[]    = "00:00:00:00:00:00"; // Battery 2 MAC
+static const char BMS_MAC_1[]    = "c8:47:80:20:69:5f"; // Battery 1 MAC
+static const char BMS_MAC_2[]    = "c8:47:80:1f:5f:11"; // Battery 2 MAC
 static const int  NUM_BMS        = 2;
 
 #define DISPLAY_REFRESH_INTERVAL 500
@@ -921,11 +921,10 @@ void loop() {
   readTouch();
   handleTouch();
 
-  // Draw current page
+  // Draw current page — only redraw when new data arrives or page/control changes
   BMSData& d = bms[navState.currentPage];
-  if (now - lastDrawTime >= DISPLAY_REFRESH_INTERVAL || d.newFrame || navState.writing) {
+  if (d.newFrame || navState.writing) {
     drawScreen(d);
-    lastDrawTime = now;
     d.newFrame = false;
   }
 
