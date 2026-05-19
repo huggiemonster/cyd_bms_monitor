@@ -414,12 +414,14 @@ static void drawSOCBar(const BMSData& d) {
   snprintf(lbl,sizeof(lbl),"SOC %d%%",d.percentRemain);
   tft.setTextColor(CLR_WHITE);
   tft.drawString(lbl,PADDING,y,1);
-  tft.fillRect(x,y+2,barW,barH,CLR_DARK_GRAY);
+  tft.fillRect(x,y+2,barW,barH,CLR_BLACK);
   int fw=(barW*d.percentRemain)/100; fw=constrain(fw,0,barW);
   uint16_t sc=CLR_GREEN;
   if(d.percentRemain<=10) sc=CLR_RED;
   else if(d.percentRemain<=25) sc=CLR_YELLOW;
-  tft.fillRect(x,y+2,fw,barH,sc);
+  if(fw > 0) {
+    tft.fillRect(x,y+2,fw,barH,sc);
+  }
   tft.drawRect(x,y+2,barW,barH,CLR_LIGHT_GRAY);
 }
 
